@@ -579,13 +579,24 @@ async def health():
     return {"status": "ok", "service": "gymtrack"}
 
 
-app.include_router(api)
+# CORS - allow credentials for cookie-based auth.
+# When CORS_ORIGINS="*", we use allow_origin_regex to support credentials (browsers reject "*" + credentials).
+_origins_env = os.environ.get("CORS_ORIGINS", "*")
+if _origins_env.strip() == "*":
+    app.add_middleware(
+        CORSMiddleware,
+        allow_credentials=True,
+        allow_origin_regex=".*",
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_credentials=True,
+        allow_origins=_origins_env.split(","),
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-# CORS - allow credentials for cookie-based auth
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.include_router(api)

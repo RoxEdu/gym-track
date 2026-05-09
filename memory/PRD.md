@@ -40,6 +40,11 @@ User provided three artifacts (architecture.md, gym-tracker-app-plan.md, sprints
 - **Deferred**: Full offline-first Dexie sync engine + PWA service worker (Sprint 4-5 spec); native Capacitor wrap
 
 ## Next Tasks
-1. Run testing agent end-to-end (backend + frontend)
-2. Address any critical bugs
-3. Continue with Sprint 7 (recommendation engine) on next user message
+1. ~~Run testing agent end-to-end~~ ✅ 20/20 backend pytest pass; frontend smoke test pass (login, protected redirect, Today, Exercises, Settings, Insights)
+2. Continue with **Sprint 7 (recommendation engine)** — pre-fill weight/reps in logger based on last set + plateau detection
+3. Sprint 8 stimulus-fatigue advanced model; Sprint 9 advanced logging (supersets, dropsets, myo-reps)
+
+## Test status (Sprint 0-6 MVP)
+- Backend: 20/20 pytest passing — health, auth gating, exercises, splits, programs, workout flow (start→log set→update→delete→complete), body measurements, progress overview, insights, **LLM digest via Claude Sonnet 4.5** working with EMERGENT_LLM_KEY
+- Frontend: login renders, protected routes redirect, authenticated Today/Library/Profile/Insights tabs all functional
+- Note: testing agent corrupted /app/frontend/.env REACT_APP_BACKEND_URL during pytest setup — restored to correct preview URL
