@@ -71,6 +71,102 @@ def compute_one_rep_max(weight: float, reps: int, rir: int = 0) -> float:
     return round(weight * (1 + effective_reps / 30.0), 2)
 
 
+# ==================== Sprint 7-8: Recommendation Engine ====================
+
+# Movement-pattern-based bodyweight multipliers for starter weights
+_STARTER_MULTIPLIERS = {
+    "Barbell Bench Press": 0.7, "Incline Barbell Press": 0.55, "Overhead Press": 0.5,
+    "Back Squat": 1.0, "Front Squat": 0.75, "Deadlift": 1.2, "Romanian Deadlift": 0.9,
+    "Hip Thrust": 1.0, "Barbell Row": 0.7, "Pendlay Row": 0.7, "T-Bar Row": 0.6,
+    "Close Grip Bench Press": 0.55, "Stiff-Leg Deadlift": 0.85,
+}
+
+
+def _round_to_increment(weight: float, equipment: str) -> float:
+    """Round to plate-friendly increment."""
+    inc = 2.5 if equipment == "barbell" else (1.0 if equipment in ("dumbbell", "cable") else 0.5)
+    return round(weight / inc) * inc
+
+
+def starter_weight(exercise: Dict, user: Dict) -> Dict:
+    """Heuristic starter weight when no history exists."""
+    bw = float(user.get("weight_kg") or 75)
+    exp = user.get("experience") or "intermediate"
+    exp_mult = {"beginner": 0.55, "intermediate": 0.85, "advanced": 1.1}.get(exp, 0.85)
+    if user.get("sex") == "female":
+        exp_mult *= 0.7
+    equipment = exercise.get("equipment", "barbell")
+    if equipment == "bodyweight":
+        return {"weight": 0.0, "reps": 8, "rir": 2, "source": "starter"}
+    name = exercise.get("name", "")
+    base = _STARTER_MULTIPLIERS.get(name)
+    if base is None:
+        # default: 35-50% BW for isolation, 60% for compound
+        base = 0.35 if exercise.get("movement") == "isolation" else 0.55
+    if equipment == "dumbbell":
+        base *= 0.4  # per-hand DB weight
+    elif equipment == "machine":
+        base *= 0.85
+    weight = _round_to_increment(bw * base * exp_mult, equipment)
+    return {"weight": max(weight, 2.5), "reps": 8, "rir": 2, "source": "starter"}
+
+
+def detect_plateau_e1rm(history: List[Dict]) -> bool:
+    """Plateau if best e1RM of last 3 sessions hasn't improved >0.5% over the prior 3."""
+    if len(history) < 6:
+        return False
+    sorted_h = sorted(history, key=lambda h: h.get("performed_at", ""))
+    recent = sorted_h[-3:]
+    prior = sorted_h[-6:-3]
+    return max(h["e1rm"] for h in recent) <= max(h["e1rm"] for h in prior) * 1.005
+
+
+def recommend_next_set(exercise: Dict, history: List[Dict], target_rep_range: List[int], user: Dict, recovery_for_subgroups: Dict[str, float]) -> Dict:
+    """Suggest weight/reps/rir for the next set.
+    Sources: 'starter' | 'last_set' | 'progression' | 'plateau_break' | 'deload_recovery'
+    """
+    if not history:
+        return starter_weight(exercise, user)
+
+    sorted_h = sorted(history, key=lambda h: h.get("performed_at", ""))
+    last = sorted_h[-1]
+    target_low, target_high = target_rep_range[0], target_rep_range[1]
+    weight = float(last.get("weight") or 0)
+    reps = int(last.get("reps") or target_low)
+    rir = int(last.get("rir") or 2)
+    equipment = exercise.get("equipment", "barbell")
+    source = "last_set"
+
+    # Progressive overload rules
+    if reps >= target_high and rir <= 1:
+        weight = _round_to_increment(weight * 1.025, equipment)
+        source = "progression"
+    elif reps < target_low and rir <= 0:
+        weight = _round_to_increment(weight * 0.95, equipment)
+        source = "deload_failed"
+
+    # Plateau check overrides progression with rep-range refresh
+    if detect_plateau_e1rm(sorted_h):
+        weight = _round_to_increment(weight * 0.9, equipment)
+        source = "plateau_break"
+
+    # Recovery modulation: weight scales 0.85→1.0 as recovery 0→1 of primary subgroup
+    primary_subgroups = list(exercise.get("subgroups", {}).keys())[:2]
+    if primary_subgroups and recovery_for_subgroups:
+        avg_recovery = sum(recovery_for_subgroups.get(sg, 1.0) for sg in primary_subgroups) / max(1, len(primary_subgroups))
+        if avg_recovery < 0.6:
+            scale = 0.85 + avg_recovery * 0.15  # ~0.85 at 0, ~0.94 at 0.6
+            weight = _round_to_increment(weight * scale, equipment)
+            source = "deload_recovery"
+
+    return {
+        "weight": max(weight, 0),
+        "reps": min(target_high, max(target_low, reps)),
+        "rir": 2,
+        "source": source,
+    }
+
+
 def compute_weekly_volume(sets: List[Dict], exercises_by_id: Dict[str, Dict], week_start: datetime) -> Dict[str, float]:
     """Compute weekly volume per subgroup using exercise contributions."""
     volume = defaultdict(float)

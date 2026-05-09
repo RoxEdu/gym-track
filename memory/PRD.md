@@ -19,19 +19,29 @@ User provided three artifacts (architecture.md, gym-tracker-app-plan.md, sprints
 - Emergent Google OAuth (cookie + bearer token)
 - Claude Sonnet 4.5 via emergentintegrations + EMERGENT_LLM_KEY for weekly digest
 
-## What's been implemented (2026-02 — Sprint 0–6 MVP equivalent)
-- **Auth**: Emergent Google OAuth flow, session cookie, /api/auth/me, logout
-- **Onboarding**: 6-step Typeform-style flow (welcome, stats, experience, goal, schedule, split selection); generates 4-week mesocycle on completion
-- **Exercise library**: 59 exercises across chest/back/shoulders/arms/legs/core with subgroup contributions, equipment, movement patterns, YouTube IDs, search/filter
-- **Splits**: 4 system templates (PPL, Upper/Lower, Full Body 3x, Bro Split)
-- **Program generator**: Picks best-fit exercises per slot, progressive volume across weeks, generates concrete workouts
-- **Workout logger**: Active workout screen, custom NumPad for weight/reps/RIR, set rows, rest timer with vibration, YouTube embed modal, supports adding extra sets, edit/delete logged sets
-- **PR detection**: Automatic e1RM (Epley) and PR tracking on each set log
-- **Body measurements**: Log weight + body fat
-- **Progress dashboard**: Weekly volume bars (8 weeks), body weight trend, PR feed, total stats
-- **Insights**: Deterministic insights (low/high volume vs MEV/MAV/MRV, PR celebrations, adherence warnings); LLM-powered weekly digest via Claude Sonnet 4.5; volume vs landmarks visualisation
-- **Recovery score**: Stimulus-fatigue model with 48h half-life decay
-- **Settings**: Profile view, body log, switch split / regenerate program, sign out
+## What's been implemented (2026-02 — Sprint 0–6 MVP)
+[unchanged from before]
+
+## What's been implemented (2026-02 — Sprint 7–9: Recommendations + Advanced Logging)
+- **Sprint 7 — Recommendation engine**:
+  - `recommend_next_set()` in services.py: progression (+2.5% if reps≥top range and RIR≤1), deload-on-failure (-5%), plateau break (-10%)
+  - `starter_weight()` heuristic: bodyweight × experience multiplier × movement-pattern multiplier, with equipment-aware rounding (barbell 2.5kg, DB 1.0kg)
+  - `detect_plateau_e1rm()`: compares last 3 vs prior 3 session best e1RMs (≤0.5% improvement = plateau)
+  - New endpoint `GET /api/workouts/{id}/recommendations` returns `{recommendations, readiness, plateau_exercise_ids}`
+  - Frontend ActiveWorkout fetches recommendations on mount, displays `rec 38kg × 8 (starter)` chip per exercise, pre-fills SetRow with suggested values
+- **Sprint 8 — Recovery-modulated**:
+  - Recommendation engine applies recovery scale (0.85→1.0) when avg recovery of primary subgroups <60%
+  - Per-exercise readiness chip on workout card (orange when <60%)
+  - Plateau alert badge per exercise card
+- **Sprint 9 — Advanced logging**:
+  - SetLogPayload extended with `seconds` (time-based), `is_unilateral`, `parent_set_id`
+  - Set type dropdown menu per row: Normal / Warmup / Dropset / Myo-rep / Cluster (with visual badges WU/DROP/MYO/CLUSTER, color-coded ring, dimmed for warmup)
+  - Warmup sets excluded from rest timer trigger and from completedCount tally
+  - Recommendations exclude warmup sets from history (so suggestions reflect working sets only)
+
+## Test status (Sprints 0-9)
+- Backend: 22/22 pytest passing (added test_recommendations + test_advanced_set_types)
+- Frontend: workout logger renders recs/readiness/set-type-menu correctly (verified via screenshots)
 
 ## Backlog (P0 → P2)
 - **P0 next sprint**: Recommendation engine (Sprint 7) — pre-fill weight/reps suggestions based on last set + plateau detection

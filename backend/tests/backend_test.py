@@ -190,3 +190,33 @@ def test_digest_llm():
     assert r.status_code == 200, r.text
     d = r.json()
     assert d.get("text") and len(d["text"]) > 10
+
+
+# ---- Sprint 7-9: recommendations & advanced sets ----
+def test_recommendations(program_state):
+    wid = program_state["workouts"][0]["id"]
+    r = requests.get(f"{API}/workouts/{wid}/recommendations", headers=H)
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert "recommendations" in d and "readiness" in d and "plateau_exercise_ids" in d
+    if d["recommendations"]:
+        sample = next(iter(d["recommendations"].values()))
+        for k in ["weight", "reps", "rir", "source"]:
+            assert k in sample
+        assert sample["source"] in {"starter", "last_set", "progression", "deload_failed", "plateau_break", "deload_recovery"}
+
+
+def test_advanced_set_types(program_state):
+    wid = program_state["workouts"][0]["id"]
+    wdata = requests.get(f"{API}/workouts/{wid}", headers=H).json()
+    wex = wdata["workout"]["exercises"][0]
+    base = {"workout_id": wid, "workout_exercise_id": wex["id"], "exercise_id": wex["exercise_id"]}
+    # warmup
+    r = requests.post(f"{API}/sets", json={**base, "set_index": 0, "weight": 40, "reps": 10, "rir": 5, "set_type": "warmup"}, headers=H)
+    assert r.status_code == 200 and r.json()["set_type"] == "warmup"
+    # dropset
+    r = requests.post(f"{API}/sets", json={**base, "set_index": 1, "weight": 80, "reps": 6, "rir": 0, "set_type": "dropset"}, headers=H)
+    assert r.status_code == 200 and r.json()["set_type"] == "dropset"
+    # time-based
+    r = requests.post(f"{API}/sets", json={**base, "set_index": 2, "weight": 0, "reps": 1, "seconds": 60, "set_type": "normal"}, headers=H)
+    assert r.status_code == 200 and r.json()["seconds"] == 60

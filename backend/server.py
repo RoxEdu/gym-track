@@ -22,6 +22,9 @@ from services import (
     generate_deterministic_insights,
     generate_llm_weekly_digest,
     compute_recovery_score,
+    recommend_next_set,
+    starter_weight,
+    detect_plateau_e1rm,
 )
 
 ROOT_DIR = Path(__file__).parent
@@ -77,10 +80,13 @@ class SetLogPayload(BaseModel):
     workout_exercise_id: str
     exercise_id: str
     set_index: int
-    weight: float
-    reps: int
+    weight: float = 0.0
+    reps: int = 0
     rir: int = 0
+    seconds: Optional[int] = None  # for time-based exercises (e.g. plank)
+    is_unilateral: bool = False
     set_type: str = "normal"  # normal, warmup, dropset, myo, cluster
+    parent_set_id: Optional[str] = None  # for dropsets/myo-reps that follow a primary set
     completed: bool = True
 
 
@@ -333,6 +339,47 @@ async def start_workout(workout_id: str, user: Dict = Depends(get_current_user))
     now = datetime.now(timezone.utc).isoformat()
     await db.workouts.update_one({"id": workout_id, "user_id": user["user_id"]}, {"$set": {"status": "in_progress", "started_at": now}})
     return {"ok": True}
+
+
+@api.get("/workouts/{workout_id}/recommendations")
+async def workout_recommendations(workout_id: str, user: Dict = Depends(get_current_user)):
+    """Per-exercise weight/reps/rir recommendations for a workout, plus per-exercise readiness."""
+    w = await db.workouts.find_one({"id": workout_id, "user_id": user["user_id"]}, {"_id": 0})
+    if not w:
+        raise HTTPException(404, "Not found")
+
+    # recovery scores
+    today = datetime.now(timezone.utc)
+    week_ago = today - timedelta(days=4)
+    stim = await db.stimulus_events.find({"user_id": user["user_id"], "created_at": {"$gte": week_ago.isoformat()}}, {"_id": 0}).to_list(200)
+    recovery = compute_recovery_score(stim)
+
+    recs: Dict[str, Dict] = {}
+    readiness: Dict[str, float] = {}
+    for we in w.get("exercises", []):
+        ex = await db.exercises.find_one({"id": we["exercise_id"]}, {"_id": 0})
+        if not ex:
+            continue
+        history = await db.sets.find(
+            {"user_id": user["user_id"], "exercise_id": we["exercise_id"], "completed": True, "set_type": {"$ne": "warmup"}},
+            {"_id": 0},
+        ).sort("performed_at", -1).limit(30).to_list(30)
+        rec = recommend_next_set(ex, history, we.get("rep_range", [8, 12]), user, recovery)
+        recs[we["id"]] = rec
+        # readiness for this exercise = avg recovery of top-2 subgroups
+        primary = list(ex.get("subgroups", {}).keys())[:2]
+        readiness[we["id"]] = sum(recovery.get(sg, 1.0) for sg in primary) / max(1, len(primary)) if primary else 1.0
+
+    plateau_exercises = []
+    for we in w.get("exercises", []):
+        history = await db.sets.find(
+            {"user_id": user["user_id"], "exercise_id": we["exercise_id"], "completed": True, "set_type": {"$ne": "warmup"}},
+            {"_id": 0},
+        ).sort("performed_at", -1).limit(30).to_list(30)
+        if detect_plateau_e1rm(history):
+            plateau_exercises.append(we["id"])
+
+    return {"recommendations": recs, "readiness": readiness, "plateau_exercise_ids": plateau_exercises}
 
 
 @api.post("/workouts/{workout_id}/complete")
