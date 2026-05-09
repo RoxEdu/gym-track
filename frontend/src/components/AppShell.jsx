@@ -15,7 +15,7 @@ export default function AppShell({ children }) {
     <div className="min-h-screen bg-background text-foreground relative">
       <div className="grain" />
       <main className="pb-24 pt-2 relative z-10">{children}</main>
-      <nav className="fixed bottom-0 inset-x-0 bg-card/95 backdrop-blur-xl border-t border-border bottom-nav-shadow z-50">
+      <nav className="fixed bottom-0 inset-x-0 bg-card/95 backdrop-blur-xl border-t border-border bottom-nav-shadow z-50" aria-label="Primary navigation">
         <div className="max-w-2xl mx-auto grid grid-cols-5">
           {tabs.map((t) => {
             const active = loc.pathname.startsWith(t.to);
@@ -25,6 +25,8 @@ export default function AppShell({ children }) {
                 key={t.to}
                 to={t.to}
                 data-testid={t.testid}
+                aria-label={t.label}
+                aria-current={active ? "page" : undefined}
                 className={`flex flex-col items-center justify-center gap-1 py-3 transition-colors ${active ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
               >
                 <Icon size={20} strokeWidth={active ? 2.5 : 1.8} />

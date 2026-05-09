@@ -4,6 +4,9 @@ import { AuthProvider } from "./lib/auth";
 import ProtectedRoute from "./components/ProtectedRoute";
 import AppShell from "./components/AppShell";
 import AuthCallback from "./components/AuthCallback";
+import ErrorBoundary from "./components/ErrorBoundary";
+import InstallPrompt from "./components/InstallPrompt";
+import OfflineBadge from "./components/OfflineBadge";
 import Login from "./pages/Login";
 import Onboarding from "./pages/Onboarding";
 import Today from "./pages/Today";
@@ -42,11 +45,18 @@ function AppRouter() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <AppRouter />
-        <Toaster position="top-center" />
-      </BrowserRouter>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <BrowserRouter>
+          <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:bg-primary focus:text-primary-foreground focus:px-3 focus:py-2 focus:rounded">Skip to content</a>
+          <div id="main-content">
+            <AppRouter />
+          </div>
+          <InstallPrompt />
+          <OfflineBadge />
+          <Toaster position="top-center" />
+        </BrowserRouter>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }

@@ -39,9 +39,24 @@ User provided three artifacts (architecture.md, gym-tracker-app-plan.md, sprints
   - Warmup sets excluded from rest timer trigger and from completedCount tally
   - Recommendations exclude warmup sets from history (so suggestions reflect working sets only)
 
-## Test status (Sprints 0-12)
-- Backend: 26/26 pytest passing (added test_insights_v2_fields, test_digest_v2_with_data_snapshot, test_mesocycle_view, test_redistribute_workouts)
-- Frontend: workout logger, mesocycle plan, insights polish, digest with hallucination guard all verified via screenshots
+## Test status (Sprints 0-14 + PWA)
+- Backend: 26/26 pytest passing
+- Frontend: skeleton loaders, error boundary, install prompt, offline badge, manifest+sw.js all verified via screenshots; lint clean (no issues)
+
+## What's been implemented (2026-02 — Sprint 14: Polish/perf/a11y)
+- **Skeleton loaders** on Today, Mesocycle, Progress (replaced "loading..." text); reusable `<PageSkeleton>` and `<ListSkeleton>` components
+- **Error boundary** at App root: catches render errors, shows graceful "Something cracked" screen with stack message + reload button
+- **A11y**: `:focus-visible` ring globally, `prefers-reduced-motion` opt-out, skip-to-content link, aria-labels on every icon-only button (NumPad keys, RestTimer controls, AppShell nav), `aria-current="page"` on active nav tab, `aria-live="polite"` on offline badge
+- **Animation pass**: existing fade-up + delay classes already in use; respects reduced-motion preference
+
+## What's been implemented (2026-02 — PWA + offline-lite sync)
+- **manifest.webmanifest**: name, theme color (#0F0F11), maskable SVG icons (192×192 + 512×512), start_url=/today, display=standalone
+- **Service worker** (`/sw.js`): network-first SWR for `/api/` GETs (cache fallback for offline reads); cache-first for static shell; auto-cleanup of old caches on activate; only registered in production builds
+- **`apple-mobile-web-app-*` meta** tags + standalone-friendly viewport
+- **Install prompt** component listening to `beforeinstallprompt`; dismiss memory in localStorage
+- **Offline outbound queue** (`lib/offlineQueue.js`): IndexedDB-backed queue for failed POST `/sets`; auto-flushes on `online` event
+- **`logSetWithQueue` wrapper** in `lib/api.js`: optimistic local response with `_offline` flag when network fails; original POST signature unchanged for callers
+- **OfflineBadge** component: shows "OFFLINE" or "N syncing" pill in top-right when offline or queue non-empty (auto-refreshes every 4s)
 
 ## What's been implemented (2026-02 — Sprint 10–11: Insights polish + LLM Tier-2)
 - **Richer LLM context**: digest now receives prev-week volume, top movers (week-over-week delta), weak subgroups (below MEV with ratio), streak days, plus PRs

@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { BarChart, Bar, ResponsiveContainer, XAxis, YAxis, Tooltip, LineChart, Line } from "recharts";
 import { Trophy } from "lucide-react";
+import { PageSkeleton } from "../components/Skeleton";
 
 export default function Progress() {
   const [data, setData] = useState(null);
   useEffect(() => { api.get("/progress/overview").then(r => setData(r.data)); }, []);
-  if (!data) return <div className="p-6 font-mono">loading...</div>;
+  if (!data) return <PageSkeleton />;
 
   const volChart = data.weekly_volume.map((w, i) => ({ week: `W${i+1}`, sets: Math.round(w.total_sets) }));
   const bodyChart = (data.body_history || []).filter(b => b.weight_kg).map(b => ({ date: new Date(b.recorded_at).toLocaleDateString(), kg: b.weight_kg }));

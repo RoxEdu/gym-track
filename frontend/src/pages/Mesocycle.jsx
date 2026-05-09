@@ -2,15 +2,18 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { Button } from "../components/ui/button";
+import { PageSkeleton } from "../components/Skeleton";
 import { CalendarRange, RefreshCw, Sparkles, ChevronRight } from "lucide-react";
 
 export default function Mesocycle() {
-  const [data, setData] = useState({ program: null, weeks: [] });
+  const [data, setData] = useState(null);
   const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
 
   const load = () => api.get("/programs/mesocycle").then(r => setData(r.data));
   useEffect(() => { load(); }, []);
+
+  if (!data) return <PageSkeleton />;
 
   const redistribute = async () => {
     setBusy(true);

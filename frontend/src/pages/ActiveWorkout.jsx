@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { api } from "../lib/api";
+import { api, logSetWithQueue } from "../lib/api";
 import { Button } from "../components/ui/button";
 import NumPad from "../components/NumPad";
 import RestTimer from "../components/RestTimer";
@@ -58,7 +58,7 @@ export default function ActiveWorkout() {
   };
 
   const logSet = async (we, setIndex, weight, reps, rir = 0, set_type = "normal", seconds = null) => {
-    const r = await api.post("/sets", {
+    const r = await logSetWithQueue({
       workout_id: workout.id,
       workout_exercise_id: we.id,
       exercise_id: we.exercise_id,

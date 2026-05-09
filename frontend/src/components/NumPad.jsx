@@ -29,6 +29,7 @@ export default function NumPad({ value, onChange, onConfirm, onClose, label = "W
             <button
               key={k}
               data-testid={`numpad-${k}`}
+              aria-label={k === "del" ? "Delete digit" : k === "." ? "Decimal point" : `Digit ${k}`}
               onClick={() => press(k)}
               className="numpad-key bg-secondary hover:bg-secondary/80 text-foreground py-4 rounded-md text-xl font-mono font-medium flex items-center justify-center"
             >

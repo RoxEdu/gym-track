@@ -3,22 +3,27 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { Button } from "../components/ui/button";
+import { PageSkeleton } from "../components/Skeleton";
 import { Calendar, Flame, TrendingUp, ArrowRight, Sparkles, CalendarRange } from "lucide-react";
 
 export default function Today() {
   const { user } = useAuth();
   const [workout, setWorkout] = useState(null);
-  const [insights, setInsights] = useState({ insights: [], weekly_volume: {}, recovery: {}, digest: null });
+  const [insights, setInsights] = useState(null);
+  const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
-    api.get("/workouts/today").then(r => setWorkout(r.data.workout));
-    api.get("/insights").then(r => setInsights(r.data));
+    Promise.all([api.get("/workouts/today"), api.get("/insights")])
+      .then(([w, i]) => { setWorkout(w.data.workout); setInsights(i.data); })
+      .finally(() => setLoading(false));
   }, []);
 
-  const totalVolumeSets = Object.values(insights.weekly_volume || {}).reduce((a,b) => a+b, 0);
-  const recoveryAvg = Object.values(insights.recovery || {}).length > 0
-    ? Object.values(insights.recovery).reduce((a,b) => a+b, 0) / Object.values(insights.recovery).length
+  if (loading) return <PageSkeleton />;
+  const ins = insights || { insights: [], weekly_volume: {}, recovery: {}, digest: null };
+  const totalVolumeSets = Object.values(ins.weekly_volume || {}).reduce((a,b) => a+b, 0);
+  const recoveryAvg = Object.values(ins.recovery || {}).length > 0
+    ? Object.values(ins.recovery).reduce((a,b) => a+b, 0) / Object.values(ins.recovery).length
     : 1;
 
   const start = async () => {
@@ -82,23 +87,23 @@ export default function Today() {
         <ArrowRight size={14} className="text-muted-foreground" />
       </button>
 
-      {insights.digest?.text && (
+      {ins.digest?.text && (
         <div className="bg-card border border-border rounded-xl p-5 fade-up delay-3" data-testid="weekly-digest">
           <div className="flex items-center gap-2 mb-2">
             <Sparkles size={14} className="text-primary" />
             <div className="text-[10px] font-mono uppercase tracking-widest text-primary">Weekly digest</div>
           </div>
-          <p className="text-sm leading-relaxed whitespace-pre-line">{insights.digest.text}</p>
+          <p className="text-sm leading-relaxed whitespace-pre-line">{ins.digest.text}</p>
         </div>
       )}
 
-      {insights.insights?.length > 0 && (
+      {ins.insights?.length > 0 && (
         <div className="space-y-2 fade-up delay-3">
           <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Insights</div>
-          {insights.insights.slice(0, 3).map((ins) => (
-            <div key={ins.id} className={`p-4 rounded-md border ${ins.severity === "success" ? "border-primary/40 bg-primary/5" : ins.severity === "warning" ? "border-destructive/30 bg-destructive/5" : "border-border bg-card"}`} data-testid={`insight-${ins.type}`}>
-              <div className="font-display text-base font-semibold">{ins.title}</div>
-              <div className="text-xs text-muted-foreground mt-1">{ins.body}</div>
+          {ins.insights.slice(0, 3).map((ix) => (
+            <div key={ix.id} className={`p-4 rounded-md border ${ix.severity === "success" ? "border-primary/40 bg-primary/5" : ix.severity === "warning" ? "border-destructive/30 bg-destructive/5" : "border-border bg-card"}`} data-testid={`insight-${ix.type}`}>
+              <div className="font-display text-base font-semibold">{ix.title}</div>
+              <div className="text-xs text-muted-foreground mt-1">{ix.body}</div>
             </div>
           ))}
         </div>

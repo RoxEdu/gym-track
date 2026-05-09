@@ -36,10 +36,10 @@ export default function RestTimer({ seconds, onClose }) {
             </div>
           </div>
           <div className="flex gap-1">
-            <Button variant="ghost" size="icon" onClick={() => setRemaining((r) => Math.max(0, r - 15))} data-testid="rest-minus"><Minus size={16} /></Button>
-            <Button variant="ghost" size="icon" onClick={() => setRemaining((r) => r + 15)} data-testid="rest-plus"><Plus size={16} /></Button>
-            <Button variant="ghost" size="icon" onClick={() => setPaused((p) => !p)} data-testid="rest-pause">{paused ? <Play size={16}/> : <Pause size={16} />}</Button>
-            <Button variant="ghost" size="icon" onClick={onClose} data-testid="rest-close"><X size={16} /></Button>
+            <Button variant="ghost" size="icon" aria-label="Subtract 15 seconds" onClick={() => setRemaining((r) => Math.max(0, r - 15))} data-testid="rest-minus"><Minus size={16} /></Button>
+            <Button variant="ghost" size="icon" aria-label="Add 15 seconds" onClick={() => setRemaining((r) => r + 15)} data-testid="rest-plus"><Plus size={16} /></Button>
+            <Button variant="ghost" size="icon" aria-label={paused ? "Resume timer" : "Pause timer"} onClick={() => setPaused((p) => !p)} data-testid="rest-pause">{paused ? <Play size={16}/> : <Pause size={16} />}</Button>
+            <Button variant="ghost" size="icon" aria-label="Close timer" onClick={onClose} data-testid="rest-close"><X size={16} /></Button>
           </div>
         </div>
       </div>
