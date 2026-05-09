@@ -1,0 +1,273 @@
+"""Seed data: exercises and system splits.
+Subgroup contributions are weights (sum ~= 1.0) representing how much each exercise targets a subgroup.
+"""
+
+# Muscle subgroups taxonomy
+MUSCLE_GROUPS = [
+    {"id": "chest", "name": "Chest", "subgroups": ["upper_chest", "mid_chest", "lower_chest"]},
+    {"id": "back", "name": "Back", "subgroups": ["lats", "upper_traps", "mid_traps", "rhomboids", "lower_back"]},
+    {"id": "shoulders", "name": "Shoulders", "subgroups": ["front_delts", "side_delts", "rear_delts"]},
+    {"id": "arms", "name": "Arms", "subgroups": ["biceps_long", "biceps_short", "triceps_long", "triceps_lateral", "triceps_medial", "forearms"]},
+    {"id": "legs", "name": "Legs", "subgroups": ["quads", "hamstrings", "glutes", "adductors", "abductors", "calves"]},
+    {"id": "core", "name": "Core", "subgroups": ["abs", "obliques"]},
+]
+
+# Comprehensive exercise library
+EXERCISES = [
+    # CHEST
+    {"name": "Barbell Bench Press", "category": "chest", "equipment": "barbell", "movement": "push", "primary": ["mid_chest"], "subgroups": {"mid_chest": 0.5, "front_delts": 0.25, "triceps_lateral": 0.15, "triceps_medial": 0.1}, "youtube_id": "rT7DgCr-3pg"},
+    {"name": "Incline Barbell Press", "category": "chest", "equipment": "barbell", "movement": "push", "primary": ["upper_chest"], "subgroups": {"upper_chest": 0.5, "front_delts": 0.3, "triceps_lateral": 0.1, "triceps_medial": 0.1}, "youtube_id": "SrqOu55lrYU"},
+    {"name": "Dumbbell Bench Press", "category": "chest", "equipment": "dumbbell", "movement": "push", "primary": ["mid_chest"], "subgroups": {"mid_chest": 0.55, "front_delts": 0.2, "triceps_lateral": 0.15, "triceps_medial": 0.1}, "youtube_id": "VmB1G1K7v94"},
+    {"name": "Incline Dumbbell Press", "category": "chest", "equipment": "dumbbell", "movement": "push", "primary": ["upper_chest"], "subgroups": {"upper_chest": 0.55, "front_delts": 0.25, "triceps_lateral": 0.1, "triceps_medial": 0.1}, "youtube_id": "8iPEnn-ltC8"},
+    {"name": "Dumbbell Fly", "category": "chest", "equipment": "dumbbell", "movement": "isolation", "primary": ["mid_chest"], "subgroups": {"mid_chest": 0.75, "front_delts": 0.25}, "youtube_id": "eozdVDA78K0"},
+    {"name": "Cable Crossover", "category": "chest", "equipment": "cable", "movement": "isolation", "primary": ["mid_chest"], "subgroups": {"mid_chest": 0.7, "lower_chest": 0.2, "front_delts": 0.1}, "youtube_id": "taI4XduLpTk"},
+    {"name": "Pec Deck", "category": "chest", "equipment": "machine", "movement": "isolation", "primary": ["mid_chest"], "subgroups": {"mid_chest": 0.85, "front_delts": 0.15}, "youtube_id": "Z57CtFmRMxA"},
+    {"name": "Dips", "category": "chest", "equipment": "bodyweight", "movement": "push", "primary": ["lower_chest"], "subgroups": {"lower_chest": 0.45, "triceps_lateral": 0.25, "triceps_medial": 0.15, "front_delts": 0.15}, "youtube_id": "2z8JmcrW-As"},
+    {"name": "Push-Up", "category": "chest", "equipment": "bodyweight", "movement": "push", "primary": ["mid_chest"], "subgroups": {"mid_chest": 0.5, "front_delts": 0.25, "triceps_lateral": 0.15, "triceps_medial": 0.1}, "youtube_id": "IODxDxX7oi4"},
+    {"name": "Machine Chest Press", "category": "chest", "equipment": "machine", "movement": "push", "primary": ["mid_chest"], "subgroups": {"mid_chest": 0.55, "front_delts": 0.2, "triceps_lateral": 0.15, "triceps_medial": 0.1}, "youtube_id": "xUm0BiZCWlQ"},
+
+    # BACK
+    {"name": "Deadlift", "category": "back", "equipment": "barbell", "movement": "hinge", "primary": ["lower_back", "glutes"], "subgroups": {"lower_back": 0.3, "glutes": 0.25, "hamstrings": 0.2, "upper_traps": 0.1, "lats": 0.1, "rhomboids": 0.05}, "youtube_id": "op9kVnSso6Q"},
+    {"name": "Pull-Up", "category": "back", "equipment": "bodyweight", "movement": "pull", "primary": ["lats"], "subgroups": {"lats": 0.55, "rhomboids": 0.15, "biceps_long": 0.15, "biceps_short": 0.1, "rear_delts": 0.05}, "youtube_id": "eGo4IYlbE5g"},
+    {"name": "Lat Pulldown", "category": "back", "equipment": "cable", "movement": "pull", "primary": ["lats"], "subgroups": {"lats": 0.55, "rhomboids": 0.15, "biceps_long": 0.15, "biceps_short": 0.1, "rear_delts": 0.05}, "youtube_id": "CAwf7n6Luuc"},
+    {"name": "Barbell Row", "category": "back", "equipment": "barbell", "movement": "pull", "primary": ["lats", "rhomboids"], "subgroups": {"lats": 0.35, "rhomboids": 0.25, "mid_traps": 0.15, "rear_delts": 0.1, "biceps_long": 0.1, "lower_back": 0.05}, "youtube_id": "FWJR5Ve8bnQ"},
+    {"name": "Dumbbell Row", "category": "back", "equipment": "dumbbell", "movement": "pull", "primary": ["lats"], "subgroups": {"lats": 0.4, "rhomboids": 0.2, "mid_traps": 0.15, "rear_delts": 0.1, "biceps_long": 0.15}, "youtube_id": "pYcpY20QaE8"},
+    {"name": "Seated Cable Row", "category": "back", "equipment": "cable", "movement": "pull", "primary": ["rhomboids", "mid_traps"], "subgroups": {"rhomboids": 0.3, "mid_traps": 0.25, "lats": 0.25, "rear_delts": 0.1, "biceps_long": 0.1}, "youtube_id": "GZbfZ033f74"},
+    {"name": "T-Bar Row", "category": "back", "equipment": "barbell", "movement": "pull", "primary": ["mid_traps", "rhomboids"], "subgroups": {"mid_traps": 0.3, "rhomboids": 0.25, "lats": 0.25, "rear_delts": 0.1, "biceps_long": 0.1}, "youtube_id": "j3Igk5nyZE4"},
+    {"name": "Face Pull", "category": "back", "equipment": "cable", "movement": "pull", "primary": ["rear_delts"], "subgroups": {"rear_delts": 0.5, "mid_traps": 0.25, "rhomboids": 0.15, "biceps_long": 0.1}, "youtube_id": "rep-qVOkqgk"},
+    {"name": "Romanian Deadlift", "category": "back", "equipment": "barbell", "movement": "hinge", "primary": ["hamstrings", "glutes"], "subgroups": {"hamstrings": 0.4, "glutes": 0.3, "lower_back": 0.2, "upper_traps": 0.05, "lats": 0.05}, "youtube_id": "JCXUYuzwNrM"},
+    {"name": "Shrug", "category": "back", "equipment": "dumbbell", "movement": "isolation", "primary": ["upper_traps"], "subgroups": {"upper_traps": 0.85, "forearms": 0.15}, "youtube_id": "g6qbq4Lf1FI"},
+    {"name": "Pendlay Row", "category": "back", "equipment": "barbell", "movement": "pull", "primary": ["lats", "rhomboids"], "subgroups": {"lats": 0.35, "rhomboids": 0.25, "mid_traps": 0.15, "rear_delts": 0.1, "biceps_long": 0.1, "lower_back": 0.05}, "youtube_id": "QM3a0IjbHpU"},
+
+    # SHOULDERS
+    {"name": "Overhead Press", "category": "shoulders", "equipment": "barbell", "movement": "push", "primary": ["front_delts"], "subgroups": {"front_delts": 0.5, "side_delts": 0.2, "triceps_lateral": 0.15, "triceps_medial": 0.1, "upper_traps": 0.05}, "youtube_id": "2yjwXTZQDDI"},
+    {"name": "Dumbbell Shoulder Press", "category": "shoulders", "equipment": "dumbbell", "movement": "push", "primary": ["front_delts"], "subgroups": {"front_delts": 0.5, "side_delts": 0.25, "triceps_lateral": 0.15, "triceps_medial": 0.1}, "youtube_id": "qEwKCR5JCog"},
+    {"name": "Lateral Raise", "category": "shoulders", "equipment": "dumbbell", "movement": "isolation", "primary": ["side_delts"], "subgroups": {"side_delts": 0.85, "front_delts": 0.1, "upper_traps": 0.05}, "youtube_id": "3VcKaXpzqRo"},
+    {"name": "Cable Lateral Raise", "category": "shoulders", "equipment": "cable", "movement": "isolation", "primary": ["side_delts"], "subgroups": {"side_delts": 0.9, "front_delts": 0.1}, "youtube_id": "PPrzBnZ5ROE"},
+    {"name": "Rear Delt Fly", "category": "shoulders", "equipment": "dumbbell", "movement": "isolation", "primary": ["rear_delts"], "subgroups": {"rear_delts": 0.75, "mid_traps": 0.15, "rhomboids": 0.1}, "youtube_id": "ttvfGg9d76c"},
+    {"name": "Reverse Pec Deck", "category": "shoulders", "equipment": "machine", "movement": "isolation", "primary": ["rear_delts"], "subgroups": {"rear_delts": 0.8, "mid_traps": 0.15, "rhomboids": 0.05}, "youtube_id": "6yMdhi2DVao"},
+    {"name": "Front Raise", "category": "shoulders", "equipment": "dumbbell", "movement": "isolation", "primary": ["front_delts"], "subgroups": {"front_delts": 0.85, "side_delts": 0.1, "upper_chest": 0.05}, "youtube_id": "qzaKUHt7Bgk"},
+    {"name": "Arnold Press", "category": "shoulders", "equipment": "dumbbell", "movement": "push", "primary": ["front_delts"], "subgroups": {"front_delts": 0.45, "side_delts": 0.3, "triceps_lateral": 0.15, "triceps_medial": 0.1}, "youtube_id": "6Z15_WdXmVw"},
+
+    # ARMS
+    {"name": "Barbell Curl", "category": "arms", "equipment": "barbell", "movement": "isolation", "primary": ["biceps_short", "biceps_long"], "subgroups": {"biceps_short": 0.45, "biceps_long": 0.4, "forearms": 0.15}, "youtube_id": "kwG2ipFRgfo"},
+    {"name": "Dumbbell Curl", "category": "arms", "equipment": "dumbbell", "movement": "isolation", "primary": ["biceps_short", "biceps_long"], "subgroups": {"biceps_short": 0.4, "biceps_long": 0.45, "forearms": 0.15}, "youtube_id": "ykJmrZ5v0Oo"},
+    {"name": "Hammer Curl", "category": "arms", "equipment": "dumbbell", "movement": "isolation", "primary": ["biceps_long"], "subgroups": {"biceps_long": 0.55, "forearms": 0.3, "biceps_short": 0.15}, "youtube_id": "zC3nLlEvin4"},
+    {"name": "Preacher Curl", "category": "arms", "equipment": "barbell", "movement": "isolation", "primary": ["biceps_short"], "subgroups": {"biceps_short": 0.7, "biceps_long": 0.2, "forearms": 0.1}, "youtube_id": "fIWP-FRFNU0"},
+    {"name": "Incline Dumbbell Curl", "category": "arms", "equipment": "dumbbell", "movement": "isolation", "primary": ["biceps_long"], "subgroups": {"biceps_long": 0.65, "biceps_short": 0.25, "forearms": 0.1}, "youtube_id": "soxrZlIl35U"},
+    {"name": "Cable Curl", "category": "arms", "equipment": "cable", "movement": "isolation", "primary": ["biceps_short", "biceps_long"], "subgroups": {"biceps_short": 0.45, "biceps_long": 0.4, "forearms": 0.15}, "youtube_id": "85Df09g_PMI"},
+    {"name": "Tricep Pushdown", "category": "arms", "equipment": "cable", "movement": "isolation", "primary": ["triceps_lateral"], "subgroups": {"triceps_lateral": 0.5, "triceps_medial": 0.4, "triceps_long": 0.1}, "youtube_id": "2-LAMcpzODU"},
+    {"name": "Skull Crusher", "category": "arms", "equipment": "barbell", "movement": "isolation", "primary": ["triceps_long"], "subgroups": {"triceps_long": 0.55, "triceps_lateral": 0.25, "triceps_medial": 0.2}, "youtube_id": "d_KZxkY_0cM"},
+    {"name": "Overhead Tricep Extension", "category": "arms", "equipment": "dumbbell", "movement": "isolation", "primary": ["triceps_long"], "subgroups": {"triceps_long": 0.6, "triceps_lateral": 0.2, "triceps_medial": 0.2}, "youtube_id": "_gsUck-7M74"},
+    {"name": "Close Grip Bench Press", "category": "arms", "equipment": "barbell", "movement": "push", "primary": ["triceps_lateral", "triceps_medial"], "subgroups": {"triceps_lateral": 0.35, "triceps_medial": 0.3, "mid_chest": 0.2, "front_delts": 0.15}, "youtube_id": "wxwY3wYMjmA"},
+    {"name": "Wrist Curl", "category": "arms", "equipment": "dumbbell", "movement": "isolation", "primary": ["forearms"], "subgroups": {"forearms": 1.0}, "youtube_id": "5w6FjTlYDPs"},
+
+    # LEGS
+    {"name": "Back Squat", "category": "legs", "equipment": "barbell", "movement": "squat", "primary": ["quads", "glutes"], "subgroups": {"quads": 0.4, "glutes": 0.3, "hamstrings": 0.15, "adductors": 0.1, "lower_back": 0.05}, "youtube_id": "ultWZbUMPL8"},
+    {"name": "Front Squat", "category": "legs", "equipment": "barbell", "movement": "squat", "primary": ["quads"], "subgroups": {"quads": 0.55, "glutes": 0.2, "hamstrings": 0.1, "adductors": 0.1, "abs": 0.05}, "youtube_id": "tlfahNdNPPI"},
+    {"name": "Leg Press", "category": "legs", "equipment": "machine", "movement": "squat", "primary": ["quads", "glutes"], "subgroups": {"quads": 0.45, "glutes": 0.3, "hamstrings": 0.15, "adductors": 0.1}, "youtube_id": "IZxyjW7MPJQ"},
+    {"name": "Bulgarian Split Squat", "category": "legs", "equipment": "dumbbell", "movement": "squat", "primary": ["quads", "glutes"], "subgroups": {"quads": 0.4, "glutes": 0.35, "hamstrings": 0.15, "adductors": 0.1}, "youtube_id": "2C-uNgKwPLE"},
+    {"name": "Lunge", "category": "legs", "equipment": "dumbbell", "movement": "squat", "primary": ["quads", "glutes"], "subgroups": {"quads": 0.4, "glutes": 0.35, "hamstrings": 0.15, "adductors": 0.1}, "youtube_id": "QOVaHwm-Q6U"},
+    {"name": "Leg Extension", "category": "legs", "equipment": "machine", "movement": "isolation", "primary": ["quads"], "subgroups": {"quads": 1.0}, "youtube_id": "YyvSfVjQeL0"},
+    {"name": "Leg Curl", "category": "legs", "equipment": "machine", "movement": "isolation", "primary": ["hamstrings"], "subgroups": {"hamstrings": 0.95, "calves": 0.05}, "youtube_id": "1Tq3QdYUuHs"},
+    {"name": "Hip Thrust", "category": "legs", "equipment": "barbell", "movement": "hinge", "primary": ["glutes"], "subgroups": {"glutes": 0.7, "hamstrings": 0.2, "quads": 0.1}, "youtube_id": "LM8XHLYJoYs"},
+    {"name": "Stiff-Leg Deadlift", "category": "legs", "equipment": "barbell", "movement": "hinge", "primary": ["hamstrings", "glutes"], "subgroups": {"hamstrings": 0.45, "glutes": 0.3, "lower_back": 0.2, "upper_traps": 0.05}, "youtube_id": "JCXUYuzwNrM"},
+    {"name": "Calf Raise", "category": "legs", "equipment": "machine", "movement": "isolation", "primary": ["calves"], "subgroups": {"calves": 1.0}, "youtube_id": "gwLzBJYoWlI"},
+    {"name": "Seated Calf Raise", "category": "legs", "equipment": "machine", "movement": "isolation", "primary": ["calves"], "subgroups": {"calves": 1.0}, "youtube_id": "JbyjNymZOt0"},
+    {"name": "Hip Adduction", "category": "legs", "equipment": "machine", "movement": "isolation", "primary": ["adductors"], "subgroups": {"adductors": 1.0}, "youtube_id": "CzDQ8_X3O60"},
+    {"name": "Hip Abduction", "category": "legs", "equipment": "machine", "movement": "isolation", "primary": ["abductors"], "subgroups": {"abductors": 0.9, "glutes": 0.1}, "youtube_id": "S0_5tFqe5SM"},
+    {"name": "Goblet Squat", "category": "legs", "equipment": "dumbbell", "movement": "squat", "primary": ["quads", "glutes"], "subgroups": {"quads": 0.45, "glutes": 0.3, "hamstrings": 0.15, "adductors": 0.1}, "youtube_id": "MeIiIdhvXT4"},
+
+    # CORE
+    {"name": "Plank", "category": "core", "equipment": "bodyweight", "movement": "isolation", "primary": ["abs"], "subgroups": {"abs": 0.7, "obliques": 0.3}, "youtube_id": "ASdvN_XEl_c"},
+    {"name": "Hanging Leg Raise", "category": "core", "equipment": "bodyweight", "movement": "isolation", "primary": ["abs"], "subgroups": {"abs": 0.85, "obliques": 0.15}, "youtube_id": "Pr1ieGZ5atk"},
+    {"name": "Cable Crunch", "category": "core", "equipment": "cable", "movement": "isolation", "primary": ["abs"], "subgroups": {"abs": 0.9, "obliques": 0.1}, "youtube_id": "3qjoXDTuyOE"},
+    {"name": "Russian Twist", "category": "core", "equipment": "bodyweight", "movement": "isolation", "primary": ["obliques"], "subgroups": {"obliques": 0.7, "abs": 0.3}, "youtube_id": "wkD8rjkodUI"},
+    {"name": "Ab Wheel Rollout", "category": "core", "equipment": "bodyweight", "movement": "isolation", "primary": ["abs"], "subgroups": {"abs": 0.8, "obliques": 0.2}, "youtube_id": "rqiTPdK1c_I"},
+]
+
+# System split templates: each day has list of {category, slot} -- we pick concrete exercises during program generation
+SYSTEM_SPLITS = [
+    {
+        "name": "Push / Pull / Legs",
+        "description": "Classic 6-day split. Push (chest/shoulders/triceps), Pull (back/biceps), Legs.",
+        "frequency_per_week": 6,
+        "days": [
+            {"day_index": 0, "name": "Push A", "muscle_focus": ["chest", "shoulders", "arms"], "slots": [
+                {"category": "chest", "movement": "push", "sets": 3, "rep_range": [6, 10]},
+                {"category": "shoulders", "movement": "push", "sets": 3, "rep_range": [6, 10]},
+                {"category": "chest", "movement": "isolation", "sets": 3, "rep_range": [10, 15]},
+                {"category": "shoulders", "movement": "isolation", "sets": 3, "rep_range": [12, 20], "subgroup": "side_delts"},
+                {"category": "arms", "movement": "isolation", "sets": 3, "rep_range": [8, 12], "subgroup": "triceps_long"},
+            ]},
+            {"day_index": 1, "name": "Pull A", "muscle_focus": ["back", "arms"], "slots": [
+                {"category": "back", "movement": "pull", "sets": 3, "rep_range": [6, 10]},
+                {"category": "back", "movement": "pull", "sets": 3, "rep_range": [8, 12]},
+                {"category": "back", "movement": "pull", "sets": 3, "rep_range": [10, 15]},
+                {"category": "shoulders", "movement": "isolation", "sets": 3, "rep_range": [12, 20], "subgroup": "rear_delts"},
+                {"category": "arms", "movement": "isolation", "sets": 3, "rep_range": [8, 12], "subgroup": "biceps_long"},
+            ]},
+            {"day_index": 2, "name": "Legs A", "muscle_focus": ["legs"], "slots": [
+                {"category": "legs", "movement": "squat", "sets": 4, "rep_range": [6, 10]},
+                {"category": "legs", "movement": "hinge", "sets": 3, "rep_range": [8, 12]},
+                {"category": "legs", "movement": "isolation", "sets": 3, "rep_range": [10, 15], "subgroup": "quads"},
+                {"category": "legs", "movement": "isolation", "sets": 3, "rep_range": [10, 15], "subgroup": "hamstrings"},
+                {"category": "legs", "movement": "isolation", "sets": 4, "rep_range": [10, 15], "subgroup": "calves"},
+            ]},
+            {"day_index": 3, "name": "Push B", "muscle_focus": ["chest", "shoulders", "arms"], "slots": [
+                {"category": "shoulders", "movement": "push", "sets": 3, "rep_range": [6, 10]},
+                {"category": "chest", "movement": "push", "sets": 3, "rep_range": [8, 12]},
+                {"category": "chest", "movement": "isolation", "sets": 3, "rep_range": [10, 15]},
+                {"category": "shoulders", "movement": "isolation", "sets": 4, "rep_range": [12, 20], "subgroup": "side_delts"},
+                {"category": "arms", "movement": "isolation", "sets": 3, "rep_range": [8, 12], "subgroup": "triceps_lateral"},
+            ]},
+            {"day_index": 4, "name": "Pull B", "muscle_focus": ["back", "arms"], "slots": [
+                {"category": "back", "movement": "pull", "sets": 3, "rep_range": [8, 12]},
+                {"category": "back", "movement": "pull", "sets": 3, "rep_range": [10, 15]},
+                {"category": "back", "movement": "hinge", "sets": 3, "rep_range": [6, 10]},
+                {"category": "shoulders", "movement": "isolation", "sets": 3, "rep_range": [12, 20], "subgroup": "rear_delts"},
+                {"category": "arms", "movement": "isolation", "sets": 3, "rep_range": [10, 15], "subgroup": "biceps_short"},
+            ]},
+            {"day_index": 5, "name": "Legs B", "muscle_focus": ["legs"], "slots": [
+                {"category": "legs", "movement": "hinge", "sets": 4, "rep_range": [6, 10]},
+                {"category": "legs", "movement": "squat", "sets": 3, "rep_range": [8, 12]},
+                {"category": "legs", "movement": "isolation", "sets": 3, "rep_range": [10, 15], "subgroup": "hamstrings"},
+                {"category": "legs", "movement": "hinge", "sets": 3, "rep_range": [10, 15], "subgroup": "glutes"},
+                {"category": "legs", "movement": "isolation", "sets": 4, "rep_range": [10, 15], "subgroup": "calves"},
+            ]},
+        ],
+    },
+    {
+        "name": "Upper / Lower",
+        "description": "4-day split alternating upper and lower body.",
+        "frequency_per_week": 4,
+        "days": [
+            {"day_index": 0, "name": "Upper A", "muscle_focus": ["chest", "back", "shoulders", "arms"], "slots": [
+                {"category": "chest", "movement": "push", "sets": 4, "rep_range": [6, 10]},
+                {"category": "back", "movement": "pull", "sets": 4, "rep_range": [6, 10]},
+                {"category": "shoulders", "movement": "push", "sets": 3, "rep_range": [8, 12]},
+                {"category": "back", "movement": "pull", "sets": 3, "rep_range": [10, 15]},
+                {"category": "arms", "movement": "isolation", "sets": 3, "rep_range": [8, 12], "subgroup": "biceps_short"},
+                {"category": "arms", "movement": "isolation", "sets": 3, "rep_range": [8, 12], "subgroup": "triceps_long"},
+            ]},
+            {"day_index": 1, "name": "Lower A", "muscle_focus": ["legs"], "slots": [
+                {"category": "legs", "movement": "squat", "sets": 4, "rep_range": [6, 10]},
+                {"category": "legs", "movement": "hinge", "sets": 3, "rep_range": [8, 12]},
+                {"category": "legs", "movement": "isolation", "sets": 3, "rep_range": [10, 15], "subgroup": "quads"},
+                {"category": "legs", "movement": "isolation", "sets": 3, "rep_range": [10, 15], "subgroup": "hamstrings"},
+                {"category": "legs", "movement": "isolation", "sets": 4, "rep_range": [10, 15], "subgroup": "calves"},
+            ]},
+            {"day_index": 2, "name": "Upper B", "muscle_focus": ["chest", "back", "shoulders", "arms"], "slots": [
+                {"category": "shoulders", "movement": "push", "sets": 4, "rep_range": [6, 10]},
+                {"category": "back", "movement": "pull", "sets": 4, "rep_range": [8, 12]},
+                {"category": "chest", "movement": "push", "sets": 3, "rep_range": [8, 12]},
+                {"category": "shoulders", "movement": "isolation", "sets": 4, "rep_range": [12, 20], "subgroup": "side_delts"},
+                {"category": "arms", "movement": "isolation", "sets": 3, "rep_range": [10, 15], "subgroup": "biceps_long"},
+                {"category": "arms", "movement": "isolation", "sets": 3, "rep_range": [10, 15], "subgroup": "triceps_lateral"},
+            ]},
+            {"day_index": 3, "name": "Lower B", "muscle_focus": ["legs"], "slots": [
+                {"category": "legs", "movement": "hinge", "sets": 4, "rep_range": [6, 10]},
+                {"category": "legs", "movement": "squat", "sets": 3, "rep_range": [8, 12]},
+                {"category": "legs", "movement": "isolation", "sets": 3, "rep_range": [10, 15], "subgroup": "hamstrings"},
+                {"category": "legs", "movement": "hinge", "sets": 3, "rep_range": [10, 15], "subgroup": "glutes"},
+                {"category": "legs", "movement": "isolation", "sets": 4, "rep_range": [10, 15], "subgroup": "calves"},
+            ]},
+        ],
+    },
+    {
+        "name": "Full Body 3x",
+        "description": "Beginner-friendly 3-day full body split.",
+        "frequency_per_week": 3,
+        "days": [
+            {"day_index": 0, "name": "Full Body A", "muscle_focus": ["chest", "back", "legs"], "slots": [
+                {"category": "legs", "movement": "squat", "sets": 3, "rep_range": [6, 10]},
+                {"category": "chest", "movement": "push", "sets": 3, "rep_range": [6, 10]},
+                {"category": "back", "movement": "pull", "sets": 3, "rep_range": [6, 10]},
+                {"category": "shoulders", "movement": "isolation", "sets": 3, "rep_range": [12, 20], "subgroup": "side_delts"},
+                {"category": "arms", "movement": "isolation", "sets": 2, "rep_range": [8, 12], "subgroup": "biceps_short"},
+                {"category": "arms", "movement": "isolation", "sets": 2, "rep_range": [8, 12], "subgroup": "triceps_long"},
+            ]},
+            {"day_index": 1, "name": "Full Body B", "muscle_focus": ["chest", "back", "legs"], "slots": [
+                {"category": "legs", "movement": "hinge", "sets": 3, "rep_range": [6, 10]},
+                {"category": "shoulders", "movement": "push", "sets": 3, "rep_range": [6, 10]},
+                {"category": "back", "movement": "pull", "sets": 3, "rep_range": [8, 12]},
+                {"category": "chest", "movement": "isolation", "sets": 3, "rep_range": [10, 15]},
+                {"category": "legs", "movement": "isolation", "sets": 3, "rep_range": [10, 15], "subgroup": "calves"},
+            ]},
+            {"day_index": 2, "name": "Full Body C", "muscle_focus": ["chest", "back", "legs"], "slots": [
+                {"category": "legs", "movement": "squat", "sets": 3, "rep_range": [8, 12]},
+                {"category": "chest", "movement": "push", "sets": 3, "rep_range": [8, 12]},
+                {"category": "back", "movement": "pull", "sets": 3, "rep_range": [10, 15]},
+                {"category": "shoulders", "movement": "isolation", "sets": 3, "rep_range": [12, 20], "subgroup": "rear_delts"},
+                {"category": "arms", "movement": "isolation", "sets": 3, "rep_range": [10, 15], "subgroup": "biceps_long"},
+            ]},
+        ],
+    },
+    {
+        "name": "Bro Split",
+        "description": "Classic 5-day body part split.",
+        "frequency_per_week": 5,
+        "days": [
+            {"day_index": 0, "name": "Chest", "muscle_focus": ["chest"], "slots": [
+                {"category": "chest", "movement": "push", "sets": 4, "rep_range": [6, 10]},
+                {"category": "chest", "movement": "push", "sets": 4, "rep_range": [8, 12]},
+                {"category": "chest", "movement": "isolation", "sets": 3, "rep_range": [10, 15]},
+                {"category": "chest", "movement": "isolation", "sets": 3, "rep_range": [12, 20]},
+            ]},
+            {"day_index": 1, "name": "Back", "muscle_focus": ["back"], "slots": [
+                {"category": "back", "movement": "pull", "sets": 4, "rep_range": [6, 10]},
+                {"category": "back", "movement": "pull", "sets": 4, "rep_range": [8, 12]},
+                {"category": "back", "movement": "pull", "sets": 3, "rep_range": [10, 15]},
+                {"category": "back", "movement": "hinge", "sets": 3, "rep_range": [8, 12]},
+            ]},
+            {"day_index": 2, "name": "Shoulders", "muscle_focus": ["shoulders"], "slots": [
+                {"category": "shoulders", "movement": "push", "sets": 4, "rep_range": [6, 10]},
+                {"category": "shoulders", "movement": "isolation", "sets": 4, "rep_range": [12, 20], "subgroup": "side_delts"},
+                {"category": "shoulders", "movement": "isolation", "sets": 3, "rep_range": [12, 20], "subgroup": "rear_delts"},
+                {"category": "shoulders", "movement": "isolation", "sets": 3, "rep_range": [10, 15], "subgroup": "front_delts"},
+            ]},
+            {"day_index": 3, "name": "Arms", "muscle_focus": ["arms"], "slots": [
+                {"category": "arms", "movement": "isolation", "sets": 4, "rep_range": [8, 12], "subgroup": "biceps_short"},
+                {"category": "arms", "movement": "isolation", "sets": 4, "rep_range": [8, 12], "subgroup": "triceps_long"},
+                {"category": "arms", "movement": "isolation", "sets": 3, "rep_range": [10, 15], "subgroup": "biceps_long"},
+                {"category": "arms", "movement": "isolation", "sets": 3, "rep_range": [10, 15], "subgroup": "triceps_lateral"},
+            ]},
+            {"day_index": 4, "name": "Legs", "muscle_focus": ["legs"], "slots": [
+                {"category": "legs", "movement": "squat", "sets": 4, "rep_range": [6, 10]},
+                {"category": "legs", "movement": "hinge", "sets": 3, "rep_range": [8, 12]},
+                {"category": "legs", "movement": "isolation", "sets": 3, "rep_range": [10, 15], "subgroup": "quads"},
+                {"category": "legs", "movement": "isolation", "sets": 3, "rep_range": [10, 15], "subgroup": "hamstrings"},
+                {"category": "legs", "movement": "isolation", "sets": 4, "rep_range": [10, 15], "subgroup": "calves"},
+            ]},
+        ],
+    },
+]
+
+# Default volume landmarks (sets per week per subgroup) - based on Mike Israetel research
+DEFAULT_LANDMARKS = {
+    "upper_chest": {"mev": 6, "mav": 14, "mrv": 20},
+    "mid_chest": {"mev": 8, "mav": 16, "mrv": 22},
+    "lower_chest": {"mev": 4, "mav": 10, "mrv": 14},
+    "lats": {"mev": 8, "mav": 16, "mrv": 22},
+    "upper_traps": {"mev": 4, "mav": 10, "mrv": 16},
+    "mid_traps": {"mev": 6, "mav": 14, "mrv": 20},
+    "rhomboids": {"mev": 6, "mav": 14, "mrv": 20},
+    "lower_back": {"mev": 4, "mav": 10, "mrv": 14},
+    "front_delts": {"mev": 6, "mav": 12, "mrv": 18},
+    "side_delts": {"mev": 8, "mav": 18, "mrv": 26},
+    "rear_delts": {"mev": 6, "mav": 16, "mrv": 22},
+    "biceps_long": {"mev": 6, "mav": 14, "mrv": 20},
+    "biceps_short": {"mev": 6, "mav": 14, "mrv": 20},
+    "triceps_long": {"mev": 6, "mav": 14, "mrv": 20},
+    "triceps_lateral": {"mev": 6, "mav": 12, "mrv": 18},
+    "triceps_medial": {"mev": 4, "mav": 10, "mrv": 14},
+    "forearms": {"mev": 4, "mav": 10, "mrv": 16},
+    "quads": {"mev": 8, "mav": 16, "mrv": 22},
+    "hamstrings": {"mev": 6, "mav": 14, "mrv": 20},
+    "glutes": {"mev": 4, "mav": 12, "mrv": 18},
+    "adductors": {"mev": 0, "mav": 8, "mrv": 14},
+    "abductors": {"mev": 0, "mav": 8, "mrv": 14},
+    "calves": {"mev": 8, "mav": 16, "mrv": 22},
+    "abs": {"mev": 0, "mav": 12, "mrv": 20},
+    "obliques": {"mev": 0, "mav": 8, "mrv": 14},
+}
