@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api, logSetWithQueue } from "../lib/api";
 import { Button } from "../components/ui/button";
@@ -30,7 +30,7 @@ export default function ActiveWorkout() {
   const [showVideo, setShowVideo] = useState(null);
   const [pendingType, setPendingType] = useState({}); // setRow key -> set_type override
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const [r1, r2] = await Promise.all([
       api.get(`/workouts/${workoutId}`),
       api.get(`/workouts/${workoutId}/recommendations`),
@@ -40,8 +40,8 @@ export default function ActiveWorkout() {
     setRecs(r2.data.recommendations || {});
     setReadiness(r2.data.readiness || {});
     setPlateauIds(r2.data.plateau_exercise_ids || []);
-  };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [workoutId]);
+  }, [workoutId]);
+  useEffect(() => { load(); }, [load]);
 
   if (!workout) return <div className="p-6 font-mono">loading...</div>;
 
