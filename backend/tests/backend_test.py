@@ -220,3 +220,52 @@ def test_advanced_set_types(program_state):
     # time-based
     r = requests.post(f"{API}/sets", json={**base, "set_index": 2, "weight": 0, "reps": 1, "seconds": 60, "set_type": "normal"}, headers=H)
     assert r.status_code == 200 and r.json()["seconds"] == 60
+
+
+# ---- Sprint 10-11: Insights polish + LLM Tier-2 ----
+def test_insights_v2_fields():
+    r = requests.get(f"{API}/insights", headers=H)
+    assert r.status_code == 200
+    d = r.json()
+    for k in ["streak_days", "weak_subgroups", "top_movers", "previous_weekly_volume"]:
+        assert k in d, f"missing {k}"
+    # weak_subgroups must be list of dicts with required keys
+    if d["weak_subgroups"]:
+        w0 = d["weak_subgroups"][0]
+        for k in ["subgroup", "sets", "mev", "ratio"]:
+            assert k in w0
+    # top_movers structure
+    if d["top_movers"]:
+        m0 = d["top_movers"][0]
+        for k in ["subgroup", "current", "previous", "delta"]:
+            assert k in m0
+
+
+def test_digest_v2_with_data_snapshot():
+    r = requests.post(f"{API}/insights/digest", headers=H, timeout=60)
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d.get("text")
+    assert d.get("source") in {"llm", "fallback", "guard_failed"}
+    assert "data_snapshot" in d
+    snap = d["data_snapshot"]
+    for k in ["weekly_volume", "completed_workouts", "compliance", "streak_days", "weak_subgroups", "top_movers"]:
+        assert k in snap
+
+
+# ---- Sprint 12: Adaptive splits + mesocycle ----
+def test_mesocycle_view():
+    r = requests.get(f"{API}/programs/mesocycle", headers=H)
+    assert r.status_code == 200
+    d = r.json()
+    assert "weeks" in d and isinstance(d["weeks"], list)
+    if d["weeks"]:
+        w = d["weeks"][0]
+        for k in ["week_index", "is_deload", "is_current", "target_sets", "completed_sets", "workouts"]:
+            assert k in w
+
+
+def test_redistribute_workouts():
+    r = requests.post(f"{API}/programs/redistribute", headers=H)
+    assert r.status_code == 200
+    assert "redistributed" in r.json()

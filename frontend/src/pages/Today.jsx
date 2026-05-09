@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { Button } from "../components/ui/button";
-import { Calendar, Flame, TrendingUp, ArrowRight, Sparkles } from "lucide-react";
+import { Calendar, Flame, TrendingUp, ArrowRight, Sparkles, CalendarRange } from "lucide-react";
 
 export default function Today() {
   const { user } = useAuth();
@@ -70,6 +70,17 @@ export default function Today() {
         <ScoreCard icon={<Flame size={16} />} label="Recovery" value={`${Math.round(recoveryAvg * 100)}%`} testid="recovery-card" />
         <ScoreCard icon={<TrendingUp size={16} />} label="Volume / week" value={`${Math.round(totalVolumeSets)} sets`} testid="volume-card" />
       </div>
+
+      <button onClick={() => navigate("/mesocycle")} data-testid="mesocycle-link" className="w-full bg-card border border-border rounded-xl p-4 text-left flex items-center justify-between hover:border-primary/40 transition-colors fade-up delay-2">
+        <div className="flex items-center gap-3">
+          <CalendarRange size={18} className="text-primary" />
+          <div>
+            <div className="font-display text-sm font-semibold">Mesocycle plan</div>
+            <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">view weeks · redistribute · start next</div>
+          </div>
+        </div>
+        <ArrowRight size={14} className="text-muted-foreground" />
+      </button>
 
       {insights.digest?.text && (
         <div className="bg-card border border-border rounded-xl p-5 fade-up delay-3" data-testid="weekly-digest">

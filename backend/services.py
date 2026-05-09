@@ -19,12 +19,14 @@ def _pick_exercise(exercises: List[Dict], category: str, movement: str, subgroup
     return scored[0] if scored else (candidates[0] if candidates else None)
 
 
-def generate_program_workouts(user_id: str, program_id: str, split: Dict, exercises: List[Dict], start_date: datetime, weeks: int = 4) -> List[Dict]:
-    """Generate concrete workouts for a mesocycle (default 4 weeks). Returns list of workout dicts ready to insert."""
+def generate_program_workouts(user_id: str, program_id: str, split: Dict, exercises: List[Dict], start_date: datetime, weeks: int = 4, deload_last: bool = True) -> List[Dict]:
+    """Generate concrete workouts for a mesocycle (default 4 weeks).
+    Volume progression: week 0 = base, week 1 = base, week 2 = +1 set, week 3 = deload (60% sets) if deload_last."""
     workouts = []
     days = split["days"]
     used_global = set()
     for week in range(weeks):
+        is_deload = deload_last and week == weeks - 1 and weeks >= 3
         for day in days:
             workout_date = start_date + timedelta(days=(week * 7) + day["day_index"])
             workout_id = str(uuid.uuid4())
@@ -34,7 +36,8 @@ def generate_program_workouts(user_id: str, program_id: str, split: Dict, exerci
                 if not ex:
                     continue
                 used_global.add(ex["id"])
-                target_sets = slot["sets"] + (1 if week >= 2 else 0)  # progressive volume
+                base_sets = slot["sets"] + (1 if week >= 2 and not is_deload else 0)
+                target_sets = max(1, round(base_sets * 0.6)) if is_deload else base_sets
                 workout_exercises.append({
                     "id": str(uuid.uuid4()),
                     "exercise_id": ex["id"],
@@ -44,15 +47,17 @@ def generate_program_workouts(user_id: str, program_id: str, split: Dict, exerci
                     "rep_range": slot["rep_range"],
                     "rest_seconds": 180 if slot["movement"] in ("squat", "hinge", "push", "pull") else 90,
                     "notes": "",
+                    "is_deload": is_deload,
                 })
             workouts.append({
                 "id": workout_id,
                 "user_id": user_id,
                 "program_id": program_id,
-                "name": day["name"],
+                "name": (day["name"] + " (Deload)") if is_deload else day["name"],
                 "scheduled_date": workout_date.isoformat(),
                 "week_index": week,
                 "day_index": day["day_index"],
+                "is_deload": is_deload,
                 "status": "scheduled",
                 "exercises": workout_exercises,
                 "started_at": None,
@@ -202,8 +207,8 @@ def detect_plateau(history: List[Dict]) -> bool:
     return recent_max <= prev_max * 1.005
 
 
-def generate_deterministic_insights(user_id: str, weekly_volume: Dict[str, float], landmarks: Dict[str, Dict], recent_workouts: List[Dict], prs: List[Dict]) -> List[Dict]:
-    """Generate insights based on rules."""
+def generate_deterministic_insights(user_id: str, weekly_volume: Dict[str, float], landmarks: Dict[str, Dict], recent_workouts: List[Dict], prs: List[Dict], streak_days: int = 0) -> List[Dict]:
+    """Generate insights based on rules. Each insight includes raw 'data' for the See-the-Data toggle."""
     insights = []
     now = datetime.now(timezone.utc).isoformat()
 
@@ -267,53 +272,165 @@ def generate_deterministic_insights(user_id: str, weekly_volume: Dict[str, float
                 "created_at": now,
                 "dismissed": False,
             })
+
+    # Streak insight
+    if streak_days >= 3:
+        insights.append({
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "type": "streak",
+            "severity": "success",
+            "title": f"{streak_days}-day streak",
+            "body": f"You've trained {streak_days} consecutive days. Your nervous system has adapted — keep listening to recovery cues.",
+            "data": {"streak_days": streak_days},
+            "created_at": now,
+            "dismissed": False,
+        })
     return insights
 
 
-async def generate_llm_weekly_digest(user_name: str, weekly_volume: Dict[str, float], prs: List[Dict], compliance: float, completed_workouts: int) -> str:
-    """Use Claude Sonnet 4.5 to generate friendly weekly digest prose."""
+async def generate_llm_weekly_digest(user_name: str, weekly_volume: Dict[str, float], prev_weekly_volume: Dict[str, float], prs: List[Dict], compliance: float, completed_workouts: int, streak_days: int, weak_subgroups: List[Dict], top_movers: List[Dict]) -> Dict:
+    """Use Claude Sonnet 4.5 to generate friendly weekly digest prose with hallucination guard.
+    Returns dict {text, source: 'llm' | 'fallback' | 'guard_failed', allowed_numbers: [..]}"""
+    # Build the canonical fact base — every number we pass in becomes "allowed"
+    top_volume = sorted(weekly_volume.items(), key=lambda x: -x[1])[:5]
+    allowed_numbers = set()
+
+    def _add_num(*vals):
+        for v in vals:
+            if v is None:
+                continue
+            try:
+                f = float(v)
+                allowed_numbers.add(round(f, 1))
+                allowed_numbers.add(round(f))
+                allowed_numbers.add(round(f * 100))  # for percentages
+            except (TypeError, ValueError):
+                pass
+
+    _add_num(completed_workouts, compliance * 100, streak_days, len(prs))
+    for k, v in top_volume:
+        _add_num(v)
+    for k, v in prev_weekly_volume.items():
+        _add_num(v)
+    for p in prs[:5]:
+        _add_num(p.get("weight"), p.get("reps"), p.get("e1rm"))
+    for w in weak_subgroups[:3]:
+        _add_num(w.get("sets"), w.get("mev"))
+    for m in top_movers[:3]:
+        _add_num(m.get("delta"), m.get("current"), m.get("previous"))
+
+    fallback_text = _fallback_digest(weekly_volume, prs, compliance, completed_workouts, streak_days)
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
         api_key = os.environ.get("EMERGENT_LLM_KEY")
         if not api_key:
-            return _fallback_digest(weekly_volume, prs, compliance, completed_workouts)
+            return {"text": fallback_text, "source": "fallback", "allowed_numbers": sorted(allowed_numbers)}
 
-        # Build data context
-        top_volume = sorted(weekly_volume.items(), key=lambda x: -x[1])[:5]
-        vol_summary = ", ".join([f"{k.replace('_', ' ')}: {v:.1f} sets" for k, v in top_volume])
+        vol_summary = ", ".join([f"{k.replace('_', ' ')}: {v:.1f} sets" for k, v in top_volume]) or "none"
+        weak_summary = "; ".join([f"{w['subgroup'].replace('_', ' ')} ({w['sets']:.1f} sets vs MEV {w['mev']})" for w in weak_subgroups[:3]]) or "none"
+        movers_summary = "; ".join([f"{m['subgroup'].replace('_', ' ')} {m['delta']:+.1f} sets" for m in top_movers[:3]]) or "none"
         pr_summary = "; ".join([f"{p['exercise_name']} {p['weight']}kg×{p['reps']}" for p in prs[:5]]) or "no new PRs"
 
         system = (
-            "You are a precise, encouraging strength coach. You write SHORT weekly digests (3-4 paragraphs max, ~150 words). "
-            "Be specific about the user's data — never invent numbers. Tone: honest, warm, no hype, no exclamation marks. "
-            "Acknowledge effort, point out one strong area, one area to watch, end with a forward-looking question or suggestion."
+            "You are a precise, encouraging strength coach writing a SHORT weekly digest (3-4 paragraphs, ~140 words). "
+            "Rules: (1) NEVER invent numbers — only use exact values from the data. "
+            "(2) Tone: honest, warm, no hype, no exclamation marks. "
+            "(3) Reference at least one specific data point (PR, weak muscle, or volume change). "
+            "(4) End with one forward-looking suggestion or question. "
+            "(5) Do not use markdown headers or bullets — flowing prose only."
         )
         prompt = (
-            f"Athlete name: {user_name}\n"
+            f"Athlete: {user_name}\n"
             f"Workouts completed this week: {completed_workouts}\n"
-            f"Adherence rate: {compliance*100:.0f}%\n"
+            f"Adherence: {compliance*100:.0f}%\n"
+            f"Current streak: {streak_days} consecutive day(s) with logged sessions\n"
             f"Top volume areas: {vol_summary}\n"
+            f"Top movers vs last week: {movers_summary}\n"
+            f"Below-MEV areas to watch: {weak_summary}\n"
             f"Personal records this week: {pr_summary}\n\n"
-            f"Write a weekly training digest based ONLY on the data above. Keep it tight."
+            f"Write the weekly digest now."
         )
 
         chat = LlmChat(api_key=api_key, session_id=f"digest-{uuid.uuid4().hex[:8]}", system_message=system).with_model("anthropic", "claude-sonnet-4-5-20250929")
         response = await chat.send_message(UserMessage(text=prompt))
-        return response.strip() if isinstance(response, str) else str(response).strip()
+        text = response.strip() if isinstance(response, str) else str(response).strip()
+
+        # Hallucination guard: every number in the response must be in allowed_numbers (or be 0/1 — common harmless values)
+        import re
+        numbers_in_text = re.findall(r"\d+(?:\.\d+)?", text)
+        suspicious = []
+        for n in numbers_in_text:
+            f = float(n)
+            if f in {0, 1, 2, 3, 4, 5, 6, 7}:  # small ordinals — allow
+                continue
+            if round(f, 1) in allowed_numbers or round(f) in allowed_numbers:
+                continue
+            suspicious.append(f)
+        if len(suspicious) >= 2:  # 2+ unverified numbers → reject the LLM output
+            print(f"[digest] hallucination guard tripped: {suspicious[:5]}")
+            return {"text": fallback_text, "source": "guard_failed", "suspicious_numbers": suspicious[:5], "allowed_numbers": sorted(allowed_numbers)}
+        return {"text": text, "source": "llm", "allowed_numbers": sorted(allowed_numbers)}
     except Exception as e:
         print(f"[digest] LLM failed: {e}")
-        return _fallback_digest(weekly_volume, prs, compliance, completed_workouts)
+        return {"text": fallback_text, "source": "fallback", "allowed_numbers": sorted(allowed_numbers), "error": str(e)}
 
 
-def _fallback_digest(weekly_volume: Dict[str, float], prs: List[Dict], compliance: float, completed: int) -> str:
+def _fallback_digest(weekly_volume: Dict[str, float], prs: List[Dict], compliance: float, completed: int, streak_days: int = 0) -> str:
     top = sorted(weekly_volume.items(), key=lambda x: -x[1])[:3]
     top_str = ", ".join([k.replace("_", " ") for k, _ in top]) if top else "none yet"
     pr_str = f"{len(prs)} new personal record(s)" if prs else "no new PRs this week"
+    streak_str = f" Streak: {streak_days} consecutive day(s)." if streak_days >= 2 else ""
     return (
-        f"You completed {completed} session(s) this week with {compliance*100:.0f}% adherence. "
+        f"You completed {completed} session(s) this week with {compliance*100:.0f}% adherence.{streak_str} "
         f"Your highest-volume areas were {top_str}. You hit {pr_str}. "
         "Stay consistent — small sessions beat skipped ones. What is one exercise you want to push next week?"
     )
+
+
+def compute_streak_days(workouts: List[Dict]) -> int:
+    """Count consecutive days (ending today or yesterday) with at least one completed workout."""
+    days_with = set()
+    for w in workouts:
+        if not w.get("completed_at"):
+            continue
+        ts = w["completed_at"]
+        if isinstance(ts, str):
+            ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        days_with.add(ts.date())
+    today = datetime.now(timezone.utc).date()
+    streak = 0
+    cursor = today
+    if cursor not in days_with:
+        cursor = today - timedelta(days=1)
+        if cursor not in days_with:
+            return 0
+    while cursor in days_with:
+        streak += 1
+        cursor -= timedelta(days=1)
+    return streak
+
+
+def find_weak_subgroups(weekly_volume: Dict[str, float], landmarks: Dict[str, Dict]) -> List[Dict]:
+    """Return subgroups below MEV, sorted by ratio (most under-trained first)."""
+    weak = []
+    for sg, sets in weekly_volume.items():
+        lm = landmarks.get(sg) or DEFAULT_LANDMARKS.get(sg) or {"mev": 0, "mav": 10, "mrv": 20}
+        if lm["mev"] > 0 and sets < lm["mev"]:
+            weak.append({"subgroup": sg, "sets": round(sets, 1), "mev": lm["mev"], "ratio": sets / lm["mev"]})
+    return sorted(weak, key=lambda x: x["ratio"])
+
+
+def compute_top_movers(current: Dict[str, float], previous: Dict[str, float], n: int = 3) -> List[Dict]:
+    """Subgroups with biggest week-over-week absolute volume delta."""
+    deltas = []
+    for sg in set(current) | set(previous):
+        c = current.get(sg, 0)
+        p = previous.get(sg, 0)
+        deltas.append({"subgroup": sg, "current": round(c, 1), "previous": round(p, 1), "delta": round(c - p, 1)})
+    return sorted(deltas, key=lambda x: -abs(x["delta"]))[:n]
 
 
 def compute_recovery_score(stimulus_events: List[Dict]) -> Dict[str, float]:

@@ -25,6 +25,9 @@ from services import (
     recommend_next_set,
     starter_weight,
     detect_plateau_e1rm,
+    compute_streak_days,
+    find_weak_subgroups,
+    compute_top_movers,
 )
 
 ROOT_DIR = Path(__file__).parent
@@ -539,7 +542,9 @@ async def get_insights(user: Dict = Depends(get_current_user)):
     exs_by_id = {e["id"]: e for e in exercises}
     today = datetime.now(timezone.utc)
     week_start = (today - timedelta(days=today.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    prev_week_start = week_start - timedelta(days=7)
     vol = compute_weekly_volume(sets, exs_by_id, week_start)
+    prev_vol = compute_weekly_volume(sets, exs_by_id, prev_week_start)
 
     landmarks_doc = await db.volume_landmarks.find_one({"user_id": user["user_id"]}, {"_id": 0})
     landmarks = (landmarks_doc or {}).get("landmarks", DEFAULT_LANDMARKS)
@@ -547,17 +552,23 @@ async def get_insights(user: Dict = Depends(get_current_user)):
     workouts = await db.workouts.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(200)
     prs = await db.prs.find({"user_id": user["user_id"]}, {"_id": 0}).sort("created_at", -1).limit(10).to_list(10)
 
-    insights = generate_deterministic_insights(user["user_id"], vol, landmarks, workouts, prs)
+    streak = compute_streak_days(workouts)
+    insights = generate_deterministic_insights(user["user_id"], vol, landmarks, workouts, prs, streak_days=streak)
 
-    # Recovery score
     week_ago = today - timedelta(days=4)
     stim = await db.stimulus_events.find({"user_id": user["user_id"], "created_at": {"$gte": week_ago.isoformat()}}, {"_id": 0}).to_list(200)
     recovery = compute_recovery_score(stim)
 
-    # Stored digest
+    weak = find_weak_subgroups(vol, landmarks)
+    movers = compute_top_movers(vol, prev_vol)
+
     digest = await db.weekly_digests.find_one({"user_id": user["user_id"]}, {"_id": 0}, sort=[("created_at", -1)])
 
-    return {"insights": insights, "weekly_volume": vol, "landmarks": landmarks, "recovery": recovery, "digest": digest}
+    return {
+        "insights": insights, "weekly_volume": vol, "previous_weekly_volume": prev_vol,
+        "landmarks": landmarks, "recovery": recovery, "digest": digest,
+        "streak_days": streak, "weak_subgroups": weak, "top_movers": movers,
+    }
 
 
 @api.post("/insights/digest")
@@ -567,7 +578,12 @@ async def generate_digest(user: Dict = Depends(get_current_user)):
     exs_by_id = {e["id"]: e for e in exercises}
     today = datetime.now(timezone.utc)
     week_start = (today - timedelta(days=today.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    prev_week_start = week_start - timedelta(days=7)
     vol = compute_weekly_volume(sets, exs_by_id, week_start)
+    prev_vol = compute_weekly_volume(sets, exs_by_id, prev_week_start)
+
+    landmarks_doc = await db.volume_landmarks.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    landmarks = (landmarks_doc or {}).get("landmarks", DEFAULT_LANDMARKS)
 
     week_ago = today - timedelta(days=7)
     week_workouts = await db.workouts.find({
@@ -578,12 +594,23 @@ async def generate_digest(user: Dict = Depends(get_current_user)):
     compliance = completed / max(1, len(week_workouts))
 
     week_prs_q = await db.prs.find({"user_id": user["user_id"], "created_at": {"$gte": week_ago.isoformat()}}, {"_id": 0}).to_list(20)
+    all_workouts = await db.workouts.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(200)
+    streak = compute_streak_days(all_workouts)
+    weak = find_weak_subgroups(vol, landmarks)
+    movers = compute_top_movers(vol, prev_vol)
 
-    text = await generate_llm_weekly_digest(user["name"], vol, week_prs_q, compliance, completed)
+    result = await generate_llm_weekly_digest(user["name"], vol, prev_vol, week_prs_q, compliance, completed, streak, weak, movers)
     digest = {
         "id": str(uuid.uuid4()),
         "user_id": user["user_id"],
-        "text": text,
+        "text": result["text"],
+        "source": result.get("source", "fallback"),
+        "data_snapshot": {
+            "weekly_volume": vol, "previous_weekly_volume": prev_vol,
+            "completed_workouts": completed, "compliance": compliance,
+            "streak_days": streak, "prs": week_prs_q[:5],
+            "weak_subgroups": weak[:3], "top_movers": movers[:3],
+        },
         "week_start": week_start.isoformat(),
         "completed_workouts": completed,
         "compliance": compliance,
@@ -592,6 +619,181 @@ async def generate_digest(user: Dict = Depends(get_current_user)):
     await db.weekly_digests.insert_one(digest)
     digest.pop("_id", None)
     return digest
+
+
+# ============ Bootstrap / seed ============
+@app.on_event("startup")
+async def startup():
+    # Seed exercises if empty
+    if await db.exercises.count_documents({}) == 0:
+        docs = []
+        for e in EXERCISES:
+            docs.append({
+                "id": str(uuid.uuid4()),
+                **e,
+            })
+        await db.exercises.insert_many(docs)
+        log.info(f"Seeded {len(docs)} exercises")
+
+    if await db.splits.count_documents({}) == 0:
+        sdocs = []
+        for s in SYSTEM_SPLITS:
+            sdocs.append({"id": str(uuid.uuid4()), "user_id": None, **s})
+        await db.splits.insert_many(sdocs)
+        log.info(f"Seeded {len(sdocs)} splits")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    client.close()
+
+
+@api.get("/")
+async def health():
+    return {"status": "ok", "service": "gymtrack"}
+
+
+# CORS - allow credentials for cookie-based auth.
+# When CORS_ORIGINS="*", we use allow_origin_regex to support credentials (browsers reject "*" + credentials).
+_origins_env = os.environ.get("CORS_ORIGINS", "*")
+if _origins_env.strip() == "*":
+    app.add_middleware(
+        CORSMiddleware,
+        allow_credentials=True,
+        allow_origin_regex=".*",
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_credentials=True,
+        allow_origins=_origins_env.split(","),
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+app.include_router(api)
+
+
+@api.post("/programs/redistribute")
+async def redistribute_workouts(user: Dict = Depends(get_current_user)):
+    """Push past-date scheduled workouts forward to the next available days, preserving order."""
+    pid = user.get("active_program_id")
+    if not pid:
+        raise HTTPException(404, "No active program")
+    today = datetime.now(timezone.utc)
+    today_start = today.replace(hour=0, minute=0, second=0, microsecond=0)
+    # find missed (scheduled, past)
+    missed = await db.workouts.find({
+        "program_id": pid,
+        "user_id": user["user_id"],
+        "status": "scheduled",
+        "scheduled_date": {"$lt": today_start.isoformat()},
+    }, {"_id": 0}).sort("scheduled_date", 1).to_list(100)
+    if not missed:
+        return {"redistributed": 0}
+
+    # Find the latest scheduled date in this program to push from
+    latest = await db.workouts.find_one({
+        "program_id": pid, "user_id": user["user_id"], "status": "scheduled",
+    }, {"_id": 0}, sort=[("scheduled_date", -1)])
+    base = today_start
+    if latest:
+        latest_date = datetime.fromisoformat(latest["scheduled_date"].replace("Z", "+00:00"))
+        if latest_date.tzinfo is None:
+            latest_date = latest_date.replace(tzinfo=timezone.utc)
+        if latest_date >= today_start:
+            base = latest_date + timedelta(days=1)
+
+    for i, w in enumerate(missed):
+        new_date = (base + timedelta(days=i)).replace(hour=6, minute=0, second=0, microsecond=0)
+        await db.workouts.update_one(
+            {"id": w["id"]},
+            {"$set": {"scheduled_date": new_date.isoformat(), "rescheduled": True}},
+        )
+    return {"redistributed": len(missed)}
+
+
+@api.get("/programs/mesocycle")
+async def mesocycle_view(user: Dict = Depends(get_current_user)):
+    """Per-week summary of the active program: target sets, completion %, deload flag."""
+    pid = user.get("active_program_id")
+    if not pid:
+        return {"weeks": []}
+    program = await db.programs.find_one({"id": pid}, {"_id": 0})
+    workouts = await db.workouts.find({"program_id": pid, "user_id": user["user_id"]}, {"_id": 0}).sort("scheduled_date", 1).to_list(200)
+
+    by_week: Dict[int, List[Dict]] = {}
+    for w in workouts:
+        by_week.setdefault(w.get("week_index", 0), []).append(w)
+
+    weeks = []
+    today = datetime.now(timezone.utc)
+    for wi in sorted(by_week):
+        ws = by_week[wi]
+        target_sets = sum(sum(e.get("target_sets", 0) for e in w.get("exercises", [])) for w in ws)
+        completed_sets = 0
+        for w in ws:
+            if w.get("status") == "completed":
+                sets_q = await db.sets.count_documents({"workout_id": w["id"], "completed": True, "set_type": {"$ne": "warmup"}})
+                completed_sets += sets_q
+        is_current = any(
+            datetime.fromisoformat(w["scheduled_date"].replace("Z", "+00:00")).replace(tzinfo=timezone.utc).date() <= today.date() <= datetime.fromisoformat(ws[-1]["scheduled_date"].replace("Z", "+00:00")).replace(tzinfo=timezone.utc).date()
+            for w in ws[:1]
+        )
+        weeks.append({
+            "week_index": wi,
+            "is_deload": ws[0].get("is_deload", False) if ws else False,
+            "is_current": is_current,
+            "target_sets": target_sets,
+            "completed_sets": completed_sets,
+            "workouts": [{"id": w["id"], "name": w["name"], "scheduled_date": w["scheduled_date"], "status": w["status"]} for w in ws],
+        })
+    return {"program": program, "weeks": weeks}
+
+
+@api.post("/programs/next-mesocycle")
+async def start_next_mesocycle(user: Dict = Depends(get_current_user), payload: Optional[Dict[str, Any]] = None):
+    """Generate a fresh mesocycle using same split, starting next Monday."""
+    payload = payload or {}
+    pid = user.get("active_program_id")
+    if not pid:
+        raise HTTPException(404, "No active program")
+    current = await db.programs.find_one({"id": pid}, {"_id": 0})
+    if not current:
+        raise HTTPException(404, "Program not found")
+    split = await db.splits.find_one({"id": current["split_id"]}, {"_id": 0})
+    exercises = await db.exercises.find({}, {"_id": 0}).to_list(500)
+
+    weeks = int(payload.get("weeks", 4))
+    new_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    start = now + timedelta(days=(7 - now.weekday()) % 7)
+    if start.date() <= now.date():
+        start += timedelta(days=7)
+    start = start.replace(hour=6, minute=0, second=0, microsecond=0)
+
+    program = {
+        "id": new_id,
+        "user_id": user["user_id"],
+        "split_id": split["id"],
+        "split_name": split["name"],
+        "weeks": weeks,
+        "current_week": 0,
+        "status": "active",
+        "start_date": start.isoformat(),
+        "created_at": now.isoformat(),
+    }
+    await db.programs.insert_one(program)
+    workouts = generate_program_workouts(user["user_id"], new_id, split, exercises, start, weeks)
+    if workouts:
+        await db.workouts.insert_many([{**w} for w in workouts])
+    # Mark old program as completed
+    await db.programs.update_one({"id": pid}, {"$set": {"status": "completed"}})
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"active_program_id": new_id}})
+    program.pop("_id", None)
+    return {"program": program, "workouts_count": len(workouts)}
 
 
 # ============ Bootstrap / seed ============

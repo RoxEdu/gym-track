@@ -39,9 +39,24 @@ User provided three artifacts (architecture.md, gym-tracker-app-plan.md, sprints
   - Warmup sets excluded from rest timer trigger and from completedCount tally
   - Recommendations exclude warmup sets from history (so suggestions reflect working sets only)
 
-## Test status (Sprints 0-9)
-- Backend: 22/22 pytest passing (added test_recommendations + test_advanced_set_types)
-- Frontend: workout logger renders recs/readiness/set-type-menu correctly (verified via screenshots)
+## Test status (Sprints 0-12)
+- Backend: 26/26 pytest passing (added test_insights_v2_fields, test_digest_v2_with_data_snapshot, test_mesocycle_view, test_redistribute_workouts)
+- Frontend: workout logger, mesocycle plan, insights polish, digest with hallucination guard all verified via screenshots
+
+## What's been implemented (2026-02 — Sprint 10–11: Insights polish + LLM Tier-2)
+- **Richer LLM context**: digest now receives prev-week volume, top movers (week-over-week delta), weak subgroups (below MEV with ratio), streak days, plus PRs
+- **Hallucination guard**: post-LLM, we extract every number from output and verify it appears in our input data; ≥2 unverified numbers → reject + auto-fall back to deterministic prose; response includes `source: 'llm' | 'fallback' | 'guard_failed'`
+- **"See the data" toggle** on every insight + on weekly digest — shows raw data_snapshot (workouts, compliance, streak, movers, weak subgroups, PRs)
+- New deterministic insight types: `streak` (3+ consecutive training days)
+- New `streak_days`, `weak_subgroups`, `top_movers`, `previous_weekly_volume` fields on `/api/insights`
+
+## What's been implemented (2026-02 — Sprint 12: Adaptive splits + mesocycle automation)
+- **Auto deload**: program generator now marks last week (when weeks≥3) as deload — target sets at 60%, workout name suffixed "(Deload)", `is_deload` flag on workout
+- **`POST /api/programs/redistribute`**: pushes past-date scheduled workouts forward to next available days, preserving order, marks `rescheduled: true`
+- **`GET /api/programs/mesocycle`**: per-week summary (target_sets, completed_sets, %, is_deload, is_current, workout list)
+- **`POST /api/programs/next-mesocycle`**: ends current program, auto-generates a fresh one (same split) starting next Monday
+- **Frontend Mesocycle page** (`/mesocycle`): week cards with progress bars + deload badge + workout list with status dots; "Redistribute missed" CTA; "Start next mesocycle" CTA when all workouts complete
+- **Today screen Mesocycle CTA**: card linking to /mesocycle
 
 ## Backlog (P0 → P2)
 - **P0 next sprint**: Recommendation engine (Sprint 7) — pre-fill weight/reps suggestions based on last set + plateau detection
