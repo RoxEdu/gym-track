@@ -322,8 +322,8 @@ async def generate_llm_weekly_digest(user_name: str, weekly_volume: Dict[str, fl
 
     fallback_text = _fallback_digest(weekly_volume, prs, compliance, completed_workouts, streak_days)
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        api_key = os.environ.get("EMERGENT_LLM_KEY")
+        from groq import Groq
+        api_key = os.environ.get("GROQ_API_KEY")
         if not api_key:
             return {"text": fallback_text, "source": "fallback", "allowed_numbers": sorted(allowed_numbers)}
 
@@ -352,9 +352,17 @@ async def generate_llm_weekly_digest(user_name: str, weekly_volume: Dict[str, fl
             f"Write the weekly digest now."
         )
 
-        chat = LlmChat(api_key=api_key, session_id=f"digest-{uuid.uuid4().hex[:8]}", system_message=system).with_model("anthropic", "claude-sonnet-4-5-20250929")
-        response = await chat.send_message(UserMessage(text=prompt))
-        text = response.strip() if isinstance(response, str) else str(response).strip()
+        client = Groq(api_key=api_key)
+        message = client.chat.completions.create(
+            model="mixtral-8x7b-32768",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=300
+        )
+        text = message.choices[0].message.content.strip()
 
         # Hallucination guard: every number in the response must be in allowed_numbers (or be 0/1 — common harmless values)
         import re

@@ -1,4 +1,5 @@
-"""Gym Progress Tracker - FastAPI backend with Emergent Google Auth."""
+"""Gym Progress Tracker - FastAPI backend with Supabase + Groq."""
+import asyncio
 import os
 import uuid
 import logging
@@ -6,12 +7,11 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 
-import httpx
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, Cookie, Header
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
+from supabase import create_client, Client
 from pydantic import BaseModel, Field, ConfigDict
 
 from seeds import EXERCISES, SYSTEM_SPLITS, MUSCLE_GROUPS, DEFAULT_LANDMARKS
@@ -23,7 +23,6 @@ from services import (
     generate_llm_weekly_digest,
     compute_recovery_score,
     recommend_next_set,
-    starter_weight,
     detect_plateau_e1rm,
     compute_streak_days,
     find_weak_subgroups,
@@ -31,11 +30,12 @@ from services import (
 )
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / ".env")
+load_dotenv(ROOT_DIR.parent / ".env")
 
-mongo_url = os.environ["MONGO_URL"]
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ["DB_NAME"]]
+SUPABASE_URL = os.environ["SUPABASE_PROJECT_URL"]
+SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
+
+sb: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 app = FastAPI(title="GymTrack API")
 api = APIRouter(prefix="/api")
@@ -44,28 +44,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 log = logging.getLogger(__name__)
 
 
-# ============ Models ============
-class UserProfile(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    user_id: str
-    email: str
-    name: str
-    picture: Optional[str] = None
-    onboarded: bool = False
-    units: str = "kg"
-    theme: str = "dark"
-    sex: Optional[str] = None
-    age: Optional[int] = None
-    height_cm: Optional[float] = None
-    weight_kg: Optional[float] = None
-    experience: Optional[str] = None  # beginner/intermediate/advanced
-    goal: Optional[str] = None  # hypertrophy/strength/recomp/cut
-    days_per_week: Optional[int] = None
-    equipment: List[str] = []
-    active_program_id: Optional[str] = None
-    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+# ── DB helpers ──────────────────────────────────────────────────────────────
+def _t(table: str):
+    return sb.table(table)
 
 
+async def _run(fn):
+    return await asyncio.to_thread(fn)
+
+
+# ── Models ──────────────────────────────────────────────────────────────────
 class OnboardingPayload(BaseModel):
     sex: str
     age: int
@@ -86,10 +74,10 @@ class SetLogPayload(BaseModel):
     weight: float = 0.0
     reps: int = 0
     rir: int = 0
-    seconds: Optional[int] = None  # for time-based exercises (e.g. plank)
+    seconds: Optional[int] = None
     is_unilateral: bool = False
-    set_type: str = "normal"  # normal, warmup, dropset, myo, cluster
-    parent_set_id: Optional[str] = None  # for dropsets/myo-reps that follow a primary set
+    set_type: str = "normal"
+    parent_set_id: Optional[str] = None
     completed: bool = True
 
 
@@ -108,89 +96,24 @@ class ProgramCreatePayload(BaseModel):
     weeks: int = 4
 
 
-# ============ Auth ============
-async def get_current_user(request: Request, authorization: Optional[str] = Header(None), session_token: Optional[str] = Cookie(None)) -> Dict:
-    token = session_token
-    if not token and authorization and authorization.startswith("Bearer "):
-        token = authorization.split(" ", 1)[1]
-    if not token:
+# ── Auth ────────────────────────────────────────────────────────────────────
+async def get_current_user(authorization: Optional[str] = Header(None)) -> Dict:
+    if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated")
+    token = authorization.split(" ", 1)[1]
+    try:
+        resp = await _run(lambda: sb.auth.get_user(token))
+        user_id = resp.user.id
+    except Exception as e:
+        log.error("Auth failed: %s", e)
+        raise HTTPException(status_code=401, detail="Invalid token")
 
-    sess = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
-    if not sess:
-        raise HTTPException(status_code=401, detail="Invalid session")
-
-    expires_at = sess.get("expires_at")
-    if isinstance(expires_at, str):
-        expires_at = datetime.fromisoformat(expires_at)
-    if expires_at and expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at and expires_at < datetime.now(timezone.utc):
-        raise HTTPException(status_code=401, detail="Session expired")
-
-    user = await db.users.find_one({"user_id": sess["user_id"]}, {"_id": 0})
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
+    result = await _run(lambda: _t("profiles").select("*").eq("id", user_id).limit(1).execute())
+    if not result.data:
+        raise HTTPException(status_code=401, detail="User profile not found")
+    user = result.data[0]
+    user["user_id"] = user["id"]
     return user
-
-
-@api.post("/auth/session")
-async def create_session(payload: Dict[str, Any], response: Response):
-    """Process Emergent session_id, fetch user data, set cookie."""
-    # REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
-    session_id = payload.get("session_id")
-    if not session_id:
-        raise HTTPException(status_code=400, detail="session_id required")
-
-    async with httpx.AsyncClient(timeout=15) as cli:
-        r = await cli.get(
-            "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-            headers={"X-Session-ID": session_id},
-        )
-    if r.status_code != 200:
-        raise HTTPException(status_code=401, detail="Invalid session_id")
-    data = r.json()
-    email = data["email"]
-
-    existing = await db.users.find_one({"email": email}, {"_id": 0})
-    if existing:
-        user_id = existing["user_id"]
-        await db.users.update_one({"user_id": user_id}, {"$set": {"name": data["name"], "picture": data.get("picture")}})
-    else:
-        user_id = f"user_{uuid.uuid4().hex[:12]}"
-        await db.users.insert_one({
-            "user_id": user_id,
-            "email": email,
-            "name": data["name"],
-            "picture": data.get("picture"),
-            "onboarded": False,
-            "units": "kg",
-            "theme": "dark",
-            "equipment": [],
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
-        # seed default volume landmarks
-        await db.volume_landmarks.insert_one({
-            "user_id": user_id,
-            "landmarks": DEFAULT_LANDMARKS,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        })
-
-    session_token = data["session_token"]
-    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
-    await db.user_sessions.insert_one({
-        "user_id": user_id,
-        "session_token": session_token,
-        "expires_at": expires_at,
-        "created_at": datetime.now(timezone.utc),
-    })
-    response.set_cookie(
-        "session_token", session_token,
-        httponly=True, secure=True, samesite="none",
-        path="/", max_age=7 * 24 * 3600,
-    )
-    user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
-    return {"user": user}
 
 
 @api.get("/auth/me")
@@ -199,52 +122,73 @@ async def me(user: Dict = Depends(get_current_user)):
 
 
 @api.post("/auth/logout")
-async def logout(response: Response, session_token: Optional[str] = Cookie(None)):
-    if session_token:
-        await db.user_sessions.delete_one({"session_token": session_token})
-    response.delete_cookie("session_token", path="/")
+async def logout():
     return {"ok": True}
 
 
-# ============ Profile / Onboarding ============
+# ── Profile / Onboarding ────────────────────────────────────────────────────
 @api.put("/profile/onboarding")
 async def complete_onboarding(payload: OnboardingPayload, user: Dict = Depends(get_current_user)):
-    update = payload.model_dump()
-    update["onboarded"] = True
-    await db.users.update_one({"user_id": user["user_id"]}, {"$set": update})
-    return await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    update = {**payload.model_dump(), "onboarded": True}
+    uid = user["id"]
+    result = await _run(lambda: _t("profiles").update(update).eq("id", uid).execute())
+    updated = result.data[0] if result.data else {**user, **update}
+    updated["user_id"] = updated["id"]
+
+    existing = await _run(lambda: _t("volume_landmarks").select("id").eq("user_id", uid).limit(1).execute())
+    if not existing.data:
+        await _run(lambda: _t("volume_landmarks").insert({"user_id": uid, "landmarks": DEFAULT_LANDMARKS}).execute())
+    return updated
 
 
 @api.put("/profile")
 async def update_profile(payload: Dict[str, Any], user: Dict = Depends(get_current_user)):
+    uid = user["id"]
     allowed = {k: v for k, v in payload.items() if k in {"name", "units", "theme", "weight_kg", "goal", "days_per_week", "equipment"}}
     if allowed:
-        await db.users.update_one({"user_id": user["user_id"]}, {"$set": allowed})
-    return await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+        await _run(lambda: _t("profiles").update(allowed).eq("id", uid).execute())
+    result = await _run(lambda: _t("profiles").select("*").eq("id", uid).limit(1).execute())
+    updated = result.data[0] if result.data else user
+    updated["user_id"] = updated["id"]
+    return updated
 
 
-# ============ Exercises ============
+# ── Exercises ────────────────────────────────────────────────────────────────
 @api.get("/exercises")
-async def list_exercises(category: Optional[str] = None, equipment: Optional[str] = None, search: Optional[str] = None, user: Dict = Depends(get_current_user)):
-    q: Dict[str, Any] = {}
-    if category:
-        q["category"] = category
-    if equipment:
-        q["equipment"] = equipment
-    if search:
-        q["name"] = {"$regex": search, "$options": "i"}
-    items = await db.exercises.find(q, {"_id": 0}).to_list(500)
-    return items
+async def list_exercises(
+    category: Optional[str] = None,
+    equipment: Optional[str] = None,
+    search: Optional[str] = None,
+    user: Dict = Depends(get_current_user),
+):
+    def _query():
+        q = _t("exercises").select("*")
+        if category:
+            q = q.eq("category", category)
+        if equipment:
+            q = q.eq("equipment", equipment)
+        if search:
+            q = q.ilike("name", f"%{search}%")
+        return q.limit(500).execute()
+
+    result = await _run(_query)
+    return result.data
 
 
 @api.get("/exercises/{exercise_id}")
 async def get_exercise(exercise_id: str, user: Dict = Depends(get_current_user)):
-    ex = await db.exercises.find_one({"id": exercise_id}, {"_id": 0})
-    if not ex:
+    uid = user["id"]
+    ex_result = await _run(lambda: _t("exercises").select("*").eq("id", exercise_id).limit(1).execute())
+    if not ex_result.data:
         raise HTTPException(404, "Not found")
-    history = await db.sets.find({"user_id": user["user_id"], "exercise_id": exercise_id, "completed": True}, {"_id": 0}).sort("performed_at", -1).limit(50).to_list(50)
-    pr = await db.prs.find_one({"user_id": user["user_id"], "exercise_id": exercise_id}, {"_id": 0})
-    return {"exercise": ex, "history": history, "pr": pr}
+    history = await _run(
+        lambda: _t("workout_sets").select("*").eq("user_id", uid).eq("exercise_id", exercise_id)
+        .eq("completed", True).order("performed_at", desc=True).limit(50).execute()
+    )
+    pr = await _run(
+        lambda: _t("personal_records").select("*").eq("user_id", uid).eq("exercise_id", exercise_id).limit(1).execute()
+    )
+    return {"exercise": ex_result.data[0], "history": history.data, "pr": pr.data[0] if pr.data else None}
 
 
 @api.get("/muscle-groups")
@@ -252,29 +196,30 @@ async def get_muscle_groups(user: Dict = Depends(get_current_user)):
     return MUSCLE_GROUPS
 
 
-# ============ Splits & Programs ============
+# ── Splits & Programs ────────────────────────────────────────────────────────
 @api.get("/splits")
 async def list_splits(user: Dict = Depends(get_current_user)):
-    items = await db.splits.find({"$or": [{"user_id": None}, {"user_id": user["user_id"]}]}, {"_id": 0}).to_list(50)
-    return items
+    result = await _run(lambda: _t("splits").select("*").limit(50).execute())
+    return result.data
 
 
 @api.post("/programs")
 async def create_program(payload: ProgramCreatePayload, user: Dict = Depends(get_current_user)):
-    split = await db.splits.find_one({"id": payload.split_id}, {"_id": 0})
-    if not split:
+    uid = user["id"]
+    split_result = await _run(lambda: _t("splits").select("*").eq("id", payload.split_id).limit(1).execute())
+    if not split_result.data:
         raise HTTPException(404, "Split not found")
-    exercises = await db.exercises.find({}, {"_id": 0}).to_list(500)
+    split = split_result.data[0]
+    exercises_result = await _run(lambda: _t("exercises").select("*").limit(500).execute())
 
     program_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
-    # find next Monday
     start = now + timedelta(days=(7 - now.weekday()) % 7)
     start = start.replace(hour=6, minute=0, second=0, microsecond=0)
 
     program = {
         "id": program_id,
-        "user_id": user["user_id"],
+        "user_id": uid,
         "split_id": split["id"],
         "split_name": split["name"],
         "weeks": payload.weeks,
@@ -283,14 +228,13 @@ async def create_program(payload: ProgramCreatePayload, user: Dict = Depends(get
         "start_date": start.isoformat(),
         "created_at": now.isoformat(),
     }
-    await db.programs.insert_one(program)
+    await _run(lambda: _t("programs").insert(program).execute())
 
-    workouts = generate_program_workouts(user["user_id"], program_id, split, exercises, start, payload.weeks)
+    workouts = generate_program_workouts(uid, program_id, split, exercises_result.data, start, payload.weeks)
     if workouts:
-        await db.workouts.insert_many([{**w} for w in workouts])
+        await _run(lambda: _t("workouts").insert(workouts).execute())
 
-    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"active_program_id": program_id}})
-    program.pop("_id", None)
+    await _run(lambda: _t("profiles").update({"active_program_id": program_id}).eq("id", uid).execute())
     return {"program": program, "workouts_count": len(workouts)}
 
 
@@ -299,12 +243,15 @@ async def get_active_program(user: Dict = Depends(get_current_user)):
     pid = user.get("active_program_id")
     if not pid:
         return {"program": None, "workouts": []}
-    program = await db.programs.find_one({"id": pid}, {"_id": 0})
-    workouts = await db.workouts.find({"program_id": pid}, {"_id": 0}).sort("scheduled_date", 1).to_list(200)
-    return {"program": program, "workouts": workouts}
+    program_result = await _run(lambda: _t("programs").select("*").eq("id", pid).limit(1).execute())
+    workouts_result = await _run(lambda: _t("workouts").select("*").eq("program_id", pid).order("scheduled_date").limit(200).execute())
+    return {
+        "program": program_result.data[0] if program_result.data else None,
+        "workouts": workouts_result.data,
+    }
 
 
-# ============ Workouts ============
+# ── Workouts ────────────────────────────────────────────────────────────────
 @api.get("/workouts/today")
 async def todays_workout(user: Dict = Depends(get_current_user)):
     pid = user.get("active_program_id")
@@ -313,73 +260,73 @@ async def todays_workout(user: Dict = Depends(get_current_user)):
     today = datetime.now(timezone.utc).date()
     today_start = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc).isoformat()
     today_end = datetime.combine(today, datetime.max.time(), tzinfo=timezone.utc).isoformat()
-    # find workout scheduled today, else next upcoming
-    w = await db.workouts.find_one({
-        "program_id": pid,
-        "scheduled_date": {"$gte": today_start, "$lte": today_end},
-        "status": {"$in": ["scheduled", "in_progress"]},
-    }, {"_id": 0})
-    if not w:
-        w = await db.workouts.find_one({
-            "program_id": pid,
-            "status": "scheduled",
-            "scheduled_date": {"$gte": today_start},
-        }, {"_id": 0}, sort=[("scheduled_date", 1)])
-    return {"workout": w}
+
+    result = await _run(
+        lambda: _t("workouts").select("*").eq("program_id", pid)
+        .in_("status", ["scheduled", "in_progress"])
+        .gte("scheduled_date", today_start).lte("scheduled_date", today_end)
+        .limit(1).execute()
+    )
+    if result.data:
+        return {"workout": result.data[0]}
+
+    result = await _run(
+        lambda: _t("workouts").select("*").eq("program_id", pid)
+        .eq("status", "scheduled").gte("scheduled_date", today_start)
+        .order("scheduled_date").limit(1).execute()
+    )
+    return {"workout": result.data[0] if result.data else None}
 
 
 @api.get("/workouts/{workout_id}")
 async def get_workout(workout_id: str, user: Dict = Depends(get_current_user)):
-    w = await db.workouts.find_one({"id": workout_id, "user_id": user["user_id"]}, {"_id": 0})
-    if not w:
+    uid = user["id"]
+    w_result = await _run(lambda: _t("workouts").select("*").eq("id", workout_id).eq("user_id", uid).limit(1).execute())
+    if not w_result.data:
         raise HTTPException(404, "Not found")
-    sets = await db.sets.find({"workout_id": workout_id}, {"_id": 0}).to_list(500)
-    return {"workout": w, "sets": sets}
+    sets_result = await _run(lambda: _t("workout_sets").select("*").eq("workout_id", workout_id).limit(500).execute())
+    return {"workout": w_result.data[0], "sets": sets_result.data}
 
 
 @api.post("/workouts/{workout_id}/start")
 async def start_workout(workout_id: str, user: Dict = Depends(get_current_user)):
+    uid = user["id"]
     now = datetime.now(timezone.utc).isoformat()
-    await db.workouts.update_one({"id": workout_id, "user_id": user["user_id"]}, {"$set": {"status": "in_progress", "started_at": now}})
+    await _run(lambda: _t("workouts").update({"status": "in_progress", "started_at": now}).eq("id", workout_id).eq("user_id", uid).execute())
     return {"ok": True}
 
 
 @api.get("/workouts/{workout_id}/recommendations")
 async def workout_recommendations(workout_id: str, user: Dict = Depends(get_current_user)):
-    """Per-exercise weight/reps/rir recommendations for a workout, plus per-exercise readiness."""
-    w = await db.workouts.find_one({"id": workout_id, "user_id": user["user_id"]}, {"_id": 0})
-    if not w:
+    uid = user["id"]
+    w_result = await _run(lambda: _t("workouts").select("*").eq("id", workout_id).eq("user_id", uid).limit(1).execute())
+    if not w_result.data:
         raise HTTPException(404, "Not found")
+    w = w_result.data[0]
 
-    # recovery scores
-    today = datetime.now(timezone.utc)
-    week_ago = today - timedelta(days=4)
-    stim = await db.stimulus_events.find({"user_id": user["user_id"], "created_at": {"$gte": week_ago.isoformat()}}, {"_id": 0}).to_list(200)
-    recovery = compute_recovery_score(stim)
+    week_ago = (datetime.now(timezone.utc) - timedelta(days=4)).isoformat()
+    stim_result = await _run(lambda: _t("stimulus_events").select("*").eq("user_id", uid).gte("created_at", week_ago).limit(200).execute())
+    recovery = compute_recovery_score(stim_result.data)
 
     recs: Dict[str, Dict] = {}
     readiness: Dict[str, float] = {}
+    plateau_exercises = []
+
     for we in w.get("exercises", []):
-        ex = await db.exercises.find_one({"id": we["exercise_id"]}, {"_id": 0})
-        if not ex:
+        ex_id = we["exercise_id"]
+        ex_result = await _run(lambda eid=ex_id: _t("exercises").select("*").eq("id", eid).limit(1).execute())
+        if not ex_result.data:
             continue
-        history = await db.sets.find(
-            {"user_id": user["user_id"], "exercise_id": we["exercise_id"], "completed": True, "set_type": {"$ne": "warmup"}},
-            {"_id": 0},
-        ).sort("performed_at", -1).limit(30).to_list(30)
-        rec = recommend_next_set(ex, history, we.get("rep_range", [8, 12]), user, recovery)
+        ex = ex_result.data[0]
+        history = await _run(
+            lambda eid=ex_id: _t("workout_sets").select("*").eq("user_id", uid).eq("exercise_id", eid)
+            .eq("completed", True).neq("set_type", "warmup").order("performed_at", desc=True).limit(30).execute()
+        )
+        rec = recommend_next_set(ex, history.data, we.get("rep_range", [8, 12]), user, recovery)
         recs[we["id"]] = rec
-        # readiness for this exercise = avg recovery of top-2 subgroups
         primary = list(ex.get("subgroups", {}).keys())[:2]
         readiness[we["id"]] = sum(recovery.get(sg, 1.0) for sg in primary) / max(1, len(primary)) if primary else 1.0
-
-    plateau_exercises = []
-    for we in w.get("exercises", []):
-        history = await db.sets.find(
-            {"user_id": user["user_id"], "exercise_id": we["exercise_id"], "completed": True, "set_type": {"$ne": "warmup"}},
-            {"_id": 0},
-        ).sort("performed_at", -1).limit(30).to_list(30)
-        if detect_plateau_e1rm(history):
+        if detect_plateau_e1rm(history.data):
             plateau_exercises.append(we["id"])
 
     return {"recommendations": recs, "readiness": readiness, "plateau_exercise_ids": plateau_exercises}
@@ -387,10 +334,13 @@ async def workout_recommendations(workout_id: str, user: Dict = Depends(get_curr
 
 @api.post("/workouts/{workout_id}/complete")
 async def complete_workout(workout_id: str, user: Dict = Depends(get_current_user)):
+    uid = user["id"]
     now = datetime.now(timezone.utc)
-    w = await db.workouts.find_one({"id": workout_id, "user_id": user["user_id"]}, {"_id": 0})
-    if not w:
+    w_result = await _run(lambda: _t("workouts").select("*").eq("id", workout_id).eq("user_id", uid).limit(1).execute())
+    if not w_result.data:
         raise HTTPException(404, "Not found")
+    w = w_result.data[0]
+
     started = w.get("started_at")
     duration = 0
     if started:
@@ -398,52 +348,57 @@ async def complete_workout(workout_id: str, user: Dict = Depends(get_current_use
         if st.tzinfo is None:
             st = st.replace(tzinfo=timezone.utc)
         duration = int((now - st).total_seconds())
-    await db.workouts.update_one({"id": workout_id}, {"$set": {"status": "completed", "completed_at": now.isoformat(), "duration_seconds": duration}})
 
-    # Track stimulus events for recovery model
-    sets = await db.sets.find({"workout_id": workout_id, "completed": True}, {"_id": 0}).to_list(500)
-    exercises_by_id = {e["id"]: e for e in await db.exercises.find({}, {"_id": 0}).to_list(500)}
+    await _run(lambda: _t("workouts").update({
+        "status": "completed", "completed_at": now.isoformat(), "duration_seconds": duration
+    }).eq("id", workout_id).execute())
+
+    sets_result = await _run(lambda: _t("workout_sets").select("*").eq("workout_id", workout_id).eq("completed", True).limit(500).execute())
+    exercises_result = await _run(lambda: _t("exercises").select("*").limit(500).execute())
+    exercises_by_id = {e["id"]: e for e in exercises_result.data}
+
     contribs: Dict[str, float] = {}
-    for s in sets:
-        ex = exercises_by_id.get(s["exercise_id"])
+    for s in sets_result.data:
+        ex = exercises_by_id.get(s.get("exercise_id"))
         if not ex:
             continue
         for sg, w_val in ex.get("subgroups", {}).items():
             contribs[sg] = contribs.get(sg, 0) + w_val
+
     if contribs:
-        await db.stimulus_events.insert_one({
+        event = {
             "id": str(uuid.uuid4()),
-            "user_id": user["user_id"],
+            "user_id": uid,
             "workout_id": workout_id,
             "contributions": contribs,
             "created_at": now.isoformat(),
-        })
+        }
+        await _run(lambda: _t("stimulus_events").insert(event).execute())
+
     return {"ok": True, "duration_seconds": duration}
 
 
+# ── Sets ─────────────────────────────────────────────────────────────────────
 @api.post("/sets")
 async def log_set(payload: SetLogPayload, user: Dict = Depends(get_current_user)):
+    uid = user["id"]
     set_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     e1rm = compute_one_rep_max(payload.weight, payload.reps, payload.rir)
-    doc = {
-        "id": set_id,
-        "user_id": user["user_id"],
-        **payload.model_dump(),
-        "e1rm": e1rm,
-        "performed_at": now,
-    }
-    await db.sets.insert_one(doc)
+    doc = {"id": set_id, "user_id": uid, **payload.model_dump(), "e1rm": e1rm, "performed_at": now}
+    await _run(lambda: _t("workout_sets").insert(doc).execute())
 
-    # Update PR if applicable
-    existing_pr = await db.prs.find_one({"user_id": user["user_id"], "exercise_id": payload.exercise_id}, {"_id": 0})
+    ex_id = payload.exercise_id
+    pr_result = await _run(lambda: _t("personal_records").select("*").eq("user_id", uid).eq("exercise_id", ex_id).limit(1).execute())
+    existing_pr = pr_result.data[0] if pr_result.data else None
     if not existing_pr or e1rm > existing_pr.get("e1rm", 0):
-        ex = await db.exercises.find_one({"id": payload.exercise_id}, {"_id": 0})
+        ex_result = await _run(lambda: _t("exercises").select("name").eq("id", ex_id).limit(1).execute())
+        ex_name = ex_result.data[0]["name"] if ex_result.data else "Exercise"
         pr = {
             "id": str(uuid.uuid4()),
-            "user_id": user["user_id"],
-            "exercise_id": payload.exercise_id,
-            "exercise_name": ex["name"] if ex else "Exercise",
+            "user_id": uid,
+            "exercise_id": ex_id,
+            "exercise_name": ex_name,
             "weight": payload.weight,
             "reps": payload.reps,
             "rir": payload.rir,
@@ -452,277 +407,226 @@ async def log_set(payload: SetLogPayload, user: Dict = Depends(get_current_user)
             "created_at": now,
         }
         if existing_pr:
-            await db.prs.update_one({"user_id": user["user_id"], "exercise_id": payload.exercise_id}, {"$set": pr})
+            await _run(lambda: _t("personal_records").update(pr).eq("user_id", uid).eq("exercise_id", ex_id).execute())
         else:
-            await db.prs.insert_one(pr)
-    doc.pop("_id", None)
+            await _run(lambda: _t("personal_records").insert(pr).execute())
     return doc
 
 
 @api.delete("/sets/{set_id}")
 async def delete_set(set_id: str, user: Dict = Depends(get_current_user)):
-    await db.sets.delete_one({"id": set_id, "user_id": user["user_id"]})
+    uid = user["id"]
+    sid = set_id
+    await _run(lambda: _t("workout_sets").delete().eq("id", sid).eq("user_id", uid).execute())
     return {"ok": True}
 
 
 @api.put("/sets/{set_id}")
 async def update_set(set_id: str, payload: Dict[str, Any], user: Dict = Depends(get_current_user)):
+    uid = user["id"]
+    sid = set_id
     allowed = {k: v for k, v in payload.items() if k in {"weight", "reps", "rir", "set_type", "completed"}}
     if "weight" in allowed and "reps" in allowed:
         allowed["e1rm"] = compute_one_rep_max(allowed["weight"], allowed["reps"], allowed.get("rir", 0))
-    await db.sets.update_one({"id": set_id, "user_id": user["user_id"]}, {"$set": allowed})
-    return await db.sets.find_one({"id": set_id}, {"_id": 0})
+    await _run(lambda: _t("workout_sets").update(allowed).eq("id", sid).eq("user_id", uid).execute())
+    result = await _run(lambda: _t("workout_sets").select("*").eq("id", sid).limit(1).execute())
+    return result.data[0] if result.data else {}
 
 
-# ============ Body Measurements ============
+# ── Body Measurements ────────────────────────────────────────────────────────
 @api.post("/body")
 async def log_measurement(payload: BodyMeasurementPayload, user: Dict = Depends(get_current_user)):
-    doc = {
-        "id": str(uuid.uuid4()),
-        "user_id": user["user_id"],
-        **payload.model_dump(exclude_none=True),
-        "recorded_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.body_measurements.insert_one(doc)
+    uid = user["id"]
+    doc = {"id": str(uuid.uuid4()), "user_id": uid, **payload.model_dump(exclude_none=True), "recorded_at": datetime.now(timezone.utc).isoformat()}
+    await _run(lambda: _t("body_measurements").insert(doc).execute())
     if payload.weight_kg:
-        await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"weight_kg": payload.weight_kg}})
-    doc.pop("_id", None)
+        wkg = payload.weight_kg
+        await _run(lambda: _t("profiles").update({"weight_kg": wkg}).eq("id", uid).execute())
     return doc
 
 
 @api.get("/body")
 async def list_measurements(user: Dict = Depends(get_current_user)):
-    items = await db.body_measurements.find({"user_id": user["user_id"]}, {"_id": 0}).sort("recorded_at", -1).to_list(500)
-    return items
+    uid = user["id"]
+    result = await _run(lambda: _t("body_measurements").select("*").eq("user_id", uid).order("recorded_at", desc=True).limit(500).execute())
+    return result.data
 
 
-# ============ Progress ============
+# ── Progress ─────────────────────────────────────────────────────────────────
 @api.get("/progress/overview")
 async def progress_overview(user: Dict = Depends(get_current_user)):
-    sets = await db.sets.find({"user_id": user["user_id"], "completed": True}, {"_id": 0}).to_list(5000)
-    exercises = await db.exercises.find({}, {"_id": 0}).to_list(500)
-    exs_by_id = {e["id"]: e for e in exercises}
+    uid = user["id"]
+    sets_result = await _run(lambda: _t("workout_sets").select("*").eq("user_id", uid).eq("completed", True).limit(5000).execute())
+    exercises_result = await _run(lambda: _t("exercises").select("*").limit(500).execute())
+    exs_by_id = {e["id"]: e for e in exercises_result.data}
 
-    # Weekly volume aggregates (last 8 weeks)
-    weeks_data = []
     today = datetime.now(timezone.utc)
+    weeks_data = []
     for i in range(8):
         week_start = (today - timedelta(days=today.weekday() + 7 * i)).replace(hour=0, minute=0, second=0, microsecond=0)
-        vol = compute_weekly_volume(sets, exs_by_id, week_start)
-        weeks_data.append({
-            "week_start": week_start.isoformat(),
-            "total_sets": sum(vol.values()),
-            "by_subgroup": vol,
-        })
+        vol = compute_weekly_volume(sets_result.data, exs_by_id, week_start)
+        weeks_data.append({"week_start": week_start.isoformat(), "total_sets": sum(vol.values()), "by_subgroup": vol})
     weeks_data.reverse()
 
-    prs = await db.prs.find({"user_id": user["user_id"]}, {"_id": 0}).sort("created_at", -1).limit(20).to_list(20)
-    body = await db.body_measurements.find({"user_id": user["user_id"]}, {"_id": 0}).sort("recorded_at", 1).to_list(200)
-    completed_workouts = await db.workouts.count_documents({"user_id": user["user_id"], "status": "completed"})
+    prs_result = await _run(lambda: _t("personal_records").select("*").eq("user_id", uid).order("created_at", desc=True).limit(20).execute())
+    body_result = await _run(lambda: _t("body_measurements").select("*").eq("user_id", uid).order("recorded_at").limit(200).execute())
+    completed_result = await _run(lambda: _t("workouts").select("id", count="exact").eq("user_id", uid).eq("status", "completed").execute())
+
     return {
         "weekly_volume": weeks_data,
-        "recent_prs": prs,
-        "body_history": body,
-        "completed_workouts": completed_workouts,
-        "total_sets": len(sets),
+        "recent_prs": prs_result.data,
+        "body_history": body_result.data,
+        "completed_workouts": completed_result.count or 0,
+        "total_sets": len(sets_result.data),
     }
 
 
 @api.get("/progress/exercise/{exercise_id}")
 async def exercise_progress(exercise_id: str, user: Dict = Depends(get_current_user)):
-    sets = await db.sets.find({"user_id": user["user_id"], "exercise_id": exercise_id, "completed": True}, {"_id": 0}).sort("performed_at", 1).to_list(500)
-    return {"sets": sets}
+    uid = user["id"]
+    ex_id = exercise_id
+    result = await _run(
+        lambda: _t("workout_sets").select("*").eq("user_id", uid).eq("exercise_id", ex_id)
+        .eq("completed", True).order("performed_at").limit(500).execute()
+    )
+    return {"sets": result.data}
 
 
-# ============ Insights ============
+# ── Insights ─────────────────────────────────────────────────────────────────
 @api.get("/insights")
 async def get_insights(user: Dict = Depends(get_current_user)):
-    sets = await db.sets.find({"user_id": user["user_id"], "completed": True}, {"_id": 0}).to_list(5000)
-    exercises = await db.exercises.find({}, {"_id": 0}).to_list(500)
-    exs_by_id = {e["id"]: e for e in exercises}
+    uid = user["id"]
+    sets_result = await _run(lambda: _t("workout_sets").select("*").eq("user_id", uid).eq("completed", True).limit(5000).execute())
+    exercises_result = await _run(lambda: _t("exercises").select("*").limit(500).execute())
+    exs_by_id = {e["id"]: e for e in exercises_result.data}
+
     today = datetime.now(timezone.utc)
     week_start = (today - timedelta(days=today.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     prev_week_start = week_start - timedelta(days=7)
-    vol = compute_weekly_volume(sets, exs_by_id, week_start)
-    prev_vol = compute_weekly_volume(sets, exs_by_id, prev_week_start)
+    vol = compute_weekly_volume(sets_result.data, exs_by_id, week_start)
+    prev_vol = compute_weekly_volume(sets_result.data, exs_by_id, prev_week_start)
 
-    landmarks_doc = await db.volume_landmarks.find_one({"user_id": user["user_id"]}, {"_id": 0})
-    landmarks = (landmarks_doc or {}).get("landmarks", DEFAULT_LANDMARKS)
+    lm_result = await _run(lambda: _t("volume_landmarks").select("*").eq("user_id", uid).limit(1).execute())
+    landmarks = lm_result.data[0].get("landmarks", DEFAULT_LANDMARKS) if lm_result.data else DEFAULT_LANDMARKS
 
-    workouts = await db.workouts.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(200)
-    prs = await db.prs.find({"user_id": user["user_id"]}, {"_id": 0}).sort("created_at", -1).limit(10).to_list(10)
+    workouts_result = await _run(lambda: _t("workouts").select("*").eq("user_id", uid).limit(200).execute())
+    prs_result = await _run(lambda: _t("personal_records").select("*").eq("user_id", uid).order("created_at", desc=True).limit(10).execute())
 
-    streak = compute_streak_days(workouts)
-    insights = generate_deterministic_insights(user["user_id"], vol, landmarks, workouts, prs, streak_days=streak)
+    streak = compute_streak_days(workouts_result.data)
+    insights = generate_deterministic_insights(uid, vol, landmarks, workouts_result.data, prs_result.data, streak_days=streak)
 
-    week_ago = today - timedelta(days=4)
-    stim = await db.stimulus_events.find({"user_id": user["user_id"], "created_at": {"$gte": week_ago.isoformat()}}, {"_id": 0}).to_list(200)
-    recovery = compute_recovery_score(stim)
+    week_ago = (today - timedelta(days=4)).isoformat()
+    stim_result = await _run(lambda: _t("stimulus_events").select("*").eq("user_id", uid).gte("created_at", week_ago).limit(200).execute())
+    recovery = compute_recovery_score(stim_result.data)
 
     weak = find_weak_subgroups(vol, landmarks)
     movers = compute_top_movers(vol, prev_vol)
-
-    digest = await db.weekly_digests.find_one({"user_id": user["user_id"]}, {"_id": 0}, sort=[("created_at", -1)])
+    digest_result = await _run(lambda: _t("weekly_digests").select("*").eq("user_id", uid).order("created_at", desc=True).limit(1).execute())
 
     return {
         "insights": insights, "weekly_volume": vol, "previous_weekly_volume": prev_vol,
-        "landmarks": landmarks, "recovery": recovery, "digest": digest,
+        "landmarks": landmarks, "recovery": recovery,
+        "digest": digest_result.data[0] if digest_result.data else None,
         "streak_days": streak, "weak_subgroups": weak, "top_movers": movers,
     }
 
 
 @api.post("/insights/digest")
 async def generate_digest(user: Dict = Depends(get_current_user)):
-    sets = await db.sets.find({"user_id": user["user_id"], "completed": True}, {"_id": 0}).to_list(5000)
-    exercises = await db.exercises.find({}, {"_id": 0}).to_list(500)
-    exs_by_id = {e["id"]: e for e in exercises}
+    uid = user["id"]
+    sets_result = await _run(lambda: _t("workout_sets").select("*").eq("user_id", uid).eq("completed", True).limit(5000).execute())
+    exercises_result = await _run(lambda: _t("exercises").select("*").limit(500).execute())
+    exs_by_id = {e["id"]: e for e in exercises_result.data}
+
     today = datetime.now(timezone.utc)
     week_start = (today - timedelta(days=today.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     prev_week_start = week_start - timedelta(days=7)
-    vol = compute_weekly_volume(sets, exs_by_id, week_start)
-    prev_vol = compute_weekly_volume(sets, exs_by_id, prev_week_start)
+    vol = compute_weekly_volume(sets_result.data, exs_by_id, week_start)
+    prev_vol = compute_weekly_volume(sets_result.data, exs_by_id, prev_week_start)
 
-    landmarks_doc = await db.volume_landmarks.find_one({"user_id": user["user_id"]}, {"_id": 0})
-    landmarks = (landmarks_doc or {}).get("landmarks", DEFAULT_LANDMARKS)
+    lm_result = await _run(lambda: _t("volume_landmarks").select("*").eq("user_id", uid).limit(1).execute())
+    landmarks = lm_result.data[0].get("landmarks", DEFAULT_LANDMARKS) if lm_result.data else DEFAULT_LANDMARKS
 
-    week_ago = today - timedelta(days=7)
-    week_workouts = await db.workouts.find({
-        "user_id": user["user_id"],
-        "scheduled_date": {"$gte": week_ago.isoformat()},
-    }, {"_id": 0}).to_list(50)
-    completed = sum(1 for w in week_workouts if w.get("status") == "completed")
-    compliance = completed / max(1, len(week_workouts))
+    week_ago = (today - timedelta(days=7)).isoformat()
+    week_workouts = await _run(lambda: _t("workouts").select("*").eq("user_id", uid).gte("scheduled_date", week_ago).limit(50).execute())
+    completed = sum(1 for w in week_workouts.data if w.get("status") == "completed")
+    compliance = completed / max(1, len(week_workouts.data))
 
-    week_prs_q = await db.prs.find({"user_id": user["user_id"], "created_at": {"$gte": week_ago.isoformat()}}, {"_id": 0}).to_list(20)
-    all_workouts = await db.workouts.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(200)
-    streak = compute_streak_days(all_workouts)
+    week_prs = await _run(lambda: _t("personal_records").select("*").eq("user_id", uid).gte("created_at", week_ago).limit(20).execute())
+    all_workouts = await _run(lambda: _t("workouts").select("*").eq("user_id", uid).limit(200).execute())
+    streak = compute_streak_days(all_workouts.data)
     weak = find_weak_subgroups(vol, landmarks)
     movers = compute_top_movers(vol, prev_vol)
 
-    result = await generate_llm_weekly_digest(user["name"], vol, prev_vol, week_prs_q, compliance, completed, streak, weak, movers)
+    result = await generate_llm_weekly_digest(user.get("name", "Athlete"), vol, prev_vol, week_prs.data, compliance, completed, streak, weak, movers)
+    now = datetime.now(timezone.utc).isoformat()
     digest = {
         "id": str(uuid.uuid4()),
-        "user_id": user["user_id"],
+        "user_id": uid,
         "text": result["text"],
         "source": result.get("source", "fallback"),
         "data_snapshot": {
             "weekly_volume": vol, "previous_weekly_volume": prev_vol,
             "completed_workouts": completed, "compliance": compliance,
-            "streak_days": streak, "prs": week_prs_q[:5],
+            "streak_days": streak, "prs": week_prs.data[:5],
             "weak_subgroups": weak[:3], "top_movers": movers[:3],
         },
         "week_start": week_start.isoformat(),
         "completed_workouts": completed,
         "compliance": compliance,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": now,
     }
-    await db.weekly_digests.insert_one(digest)
-    digest.pop("_id", None)
+    await _run(lambda: _t("weekly_digests").insert(digest).execute())
     return digest
 
 
-# ============ Bootstrap / seed ============
-@app.on_event("startup")
-async def startup():
-    # Seed exercises if empty
-    if await db.exercises.count_documents({}) == 0:
-        docs = []
-        for e in EXERCISES:
-            docs.append({
-                "id": str(uuid.uuid4()),
-                **e,
-            })
-        await db.exercises.insert_many(docs)
-        log.info(f"Seeded {len(docs)} exercises")
-
-    if await db.splits.count_documents({}) == 0:
-        sdocs = []
-        for s in SYSTEM_SPLITS:
-            sdocs.append({"id": str(uuid.uuid4()), "user_id": None, **s})
-        await db.splits.insert_many(sdocs)
-        log.info(f"Seeded {len(sdocs)} splits")
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    client.close()
-
-
-@api.get("/")
-async def health():
-    return {"status": "ok", "service": "gymtrack"}
-
-
-# CORS - allow credentials for cookie-based auth.
-# When CORS_ORIGINS="*", we use allow_origin_regex to support credentials (browsers reject "*" + credentials).
-_origins_env = os.environ.get("CORS_ORIGINS", "*")
-if _origins_env.strip() == "*":
-    app.add_middleware(
-        CORSMiddleware,
-        allow_credentials=True,
-        allow_origin_regex=".*",
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-else:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_credentials=True,
-        allow_origins=_origins_env.split(","),
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-app.include_router(api)
-
-
+# ── Program management ────────────────────────────────────────────────────────
 @api.post("/programs/redistribute")
 async def redistribute_workouts(user: Dict = Depends(get_current_user)):
-    """Push past-date scheduled workouts forward to the next available days, preserving order."""
+    uid = user["id"]
     pid = user.get("active_program_id")
     if not pid:
         raise HTTPException(404, "No active program")
-    today = datetime.now(timezone.utc)
-    today_start = today.replace(hour=0, minute=0, second=0, microsecond=0)
-    # find missed (scheduled, past)
-    missed = await db.workouts.find({
-        "program_id": pid,
-        "user_id": user["user_id"],
-        "status": "scheduled",
-        "scheduled_date": {"$lt": today_start.isoformat()},
-    }, {"_id": 0}).sort("scheduled_date", 1).to_list(100)
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+    missed_result = await _run(
+        lambda: _t("workouts").select("*").eq("program_id", pid).eq("user_id", uid)
+        .eq("status", "scheduled").lt("scheduled_date", today_start)
+        .order("scheduled_date").limit(100).execute()
+    )
+    missed = missed_result.data
     if not missed:
         return {"redistributed": 0}
 
-    # Find the latest scheduled date in this program to push from
-    latest = await db.workouts.find_one({
-        "program_id": pid, "user_id": user["user_id"], "status": "scheduled",
-    }, {"_id": 0}, sort=[("scheduled_date", -1)])
-    base = today_start
-    if latest:
-        latest_date = datetime.fromisoformat(latest["scheduled_date"].replace("Z", "+00:00"))
+    latest_result = await _run(
+        lambda: _t("workouts").select("*").eq("program_id", pid).eq("user_id", uid)
+        .eq("status", "scheduled").order("scheduled_date", desc=True).limit(1).execute()
+    )
+    base = datetime.now(timezone.utc)
+    if latest_result.data:
+        latest_date = datetime.fromisoformat(latest_result.data[0]["scheduled_date"].replace("Z", "+00:00"))
         if latest_date.tzinfo is None:
             latest_date = latest_date.replace(tzinfo=timezone.utc)
-        if latest_date >= today_start:
+        if latest_date >= base:
             base = latest_date + timedelta(days=1)
 
     for i, w in enumerate(missed):
-        new_date = (base + timedelta(days=i)).replace(hour=6, minute=0, second=0, microsecond=0)
-        await db.workouts.update_one(
-            {"id": w["id"]},
-            {"$set": {"scheduled_date": new_date.isoformat(), "rescheduled": True}},
-        )
+        new_date = (base + timedelta(days=i)).replace(hour=6, minute=0, second=0, microsecond=0).isoformat()
+        wid = w["id"]
+        await _run(lambda wid=wid, nd=new_date: _t("workouts").update({"scheduled_date": nd, "rescheduled": True}).eq("id", wid).execute())
+
     return {"redistributed": len(missed)}
 
 
 @api.get("/programs/mesocycle")
 async def mesocycle_view(user: Dict = Depends(get_current_user)):
-    """Per-week summary of the active program: target sets, completion %, deload flag."""
+    uid = user["id"]
     pid = user.get("active_program_id")
     if not pid:
         return {"weeks": []}
-    program = await db.programs.find_one({"id": pid}, {"_id": 0})
-    workouts = await db.workouts.find({"program_id": pid, "user_id": user["user_id"]}, {"_id": 0}).sort("scheduled_date", 1).to_list(200)
+    program_result = await _run(lambda: _t("programs").select("*").eq("id", pid).limit(1).execute())
+    workouts_result = await _run(lambda: _t("workouts").select("*").eq("program_id", pid).eq("user_id", uid).order("scheduled_date").limit(200).execute())
+    workouts = workouts_result.data
 
     by_week: Dict[int, List[Dict]] = {}
     for w in workouts:
@@ -736,35 +640,37 @@ async def mesocycle_view(user: Dict = Depends(get_current_user)):
         completed_sets = 0
         for w in ws:
             if w.get("status") == "completed":
-                sets_q = await db.sets.count_documents({"workout_id": w["id"], "completed": True, "set_type": {"$ne": "warmup"}})
-                completed_sets += sets_q
+                wid = w["id"]
+                sets_result = await _run(lambda wid=wid: _t("workout_sets").select("id", count="exact").eq("workout_id", wid).eq("completed", True).neq("set_type", "warmup").execute())
+                completed_sets += sets_result.count or 0
         is_current = any(
-            datetime.fromisoformat(w["scheduled_date"].replace("Z", "+00:00")).replace(tzinfo=timezone.utc).date() <= today.date() <= datetime.fromisoformat(ws[-1]["scheduled_date"].replace("Z", "+00:00")).replace(tzinfo=timezone.utc).date()
+            datetime.fromisoformat(w["scheduled_date"].replace("Z", "+00:00")).replace(tzinfo=timezone.utc).date() <= today.date()
             for w in ws[:1]
-        )
+        ) if ws else False
         weeks.append({
             "week_index": wi,
             "is_deload": ws[0].get("is_deload", False) if ws else False,
             "is_current": is_current,
             "target_sets": target_sets,
             "completed_sets": completed_sets,
-            "workouts": [{"id": w["id"], "name": w["name"], "scheduled_date": w["scheduled_date"], "status": w["status"]} for w in ws],
+            "workouts": [{"id": w["id"], "name": w.get("name"), "scheduled_date": w["scheduled_date"], "status": w["status"]} for w in ws],
         })
-    return {"program": program, "weeks": weeks}
+    return {"program": program_result.data[0] if program_result.data else None, "weeks": weeks}
 
 
 @api.post("/programs/next-mesocycle")
 async def start_next_mesocycle(user: Dict = Depends(get_current_user), payload: Optional[Dict[str, Any]] = None):
-    """Generate a fresh mesocycle using same split, starting next Monday."""
+    uid = user["id"]
     payload = payload or {}
     pid = user.get("active_program_id")
     if not pid:
         raise HTTPException(404, "No active program")
-    current = await db.programs.find_one({"id": pid}, {"_id": 0})
-    if not current:
+    current_result = await _run(lambda: _t("programs").select("*").eq("id", pid).limit(1).execute())
+    if not current_result.data:
         raise HTTPException(404, "Program not found")
-    split = await db.splits.find_one({"id": current["split_id"]}, {"_id": 0})
-    exercises = await db.exercises.find({}, {"_id": 0}).to_list(500)
+    current = current_result.data[0]
+    split_result = await _run(lambda: _t("splits").select("*").eq("id", current["split_id"]).limit(1).execute())
+    exercises_result = await _run(lambda: _t("exercises").select("*").limit(500).execute())
 
     weeks = int(payload.get("weeks", 4))
     new_id = str(uuid.uuid4())
@@ -774,78 +680,68 @@ async def start_next_mesocycle(user: Dict = Depends(get_current_user), payload: 
         start += timedelta(days=7)
     start = start.replace(hour=6, minute=0, second=0, microsecond=0)
 
+    split = split_result.data[0] if split_result.data else current
     program = {
-        "id": new_id,
-        "user_id": user["user_id"],
-        "split_id": split["id"],
-        "split_name": split["name"],
-        "weeks": weeks,
-        "current_week": 0,
-        "status": "active",
-        "start_date": start.isoformat(),
-        "created_at": now.isoformat(),
+        "id": new_id, "user_id": uid,
+        "split_id": split["id"], "split_name": split.get("name", current.get("split_name")),
+        "weeks": weeks, "current_week": 0, "status": "active",
+        "start_date": start.isoformat(), "created_at": now.isoformat(),
     }
-    await db.programs.insert_one(program)
-    workouts = generate_program_workouts(user["user_id"], new_id, split, exercises, start, weeks)
+    await _run(lambda: _t("programs").insert(program).execute())
+    workouts = generate_program_workouts(uid, new_id, split, exercises_result.data, start, weeks)
     if workouts:
-        await db.workouts.insert_many([{**w} for w in workouts])
-    # Mark old program as completed
-    await db.programs.update_one({"id": pid}, {"$set": {"status": "completed"}})
-    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"active_program_id": new_id}})
-    program.pop("_id", None)
+        await _run(lambda: _t("workouts").insert(workouts).execute())
+    await _run(lambda: _t("programs").update({"status": "completed"}).eq("id", pid).execute())
+    await _run(lambda: _t("profiles").update({"active_program_id": new_id}).eq("id", uid).execute())
     return {"program": program, "workouts_count": len(workouts)}
 
 
-# ============ Bootstrap / seed ============
-@app.on_event("startup")
-async def startup():
-    # Seed exercises if empty
-    if await db.exercises.count_documents({}) == 0:
-        docs = []
-        for e in EXERCISES:
-            docs.append({
-                "id": str(uuid.uuid4()),
-                **e,
-            })
-        await db.exercises.insert_many(docs)
-        log.info(f"Seeded {len(docs)} exercises")
-
-    if await db.splits.count_documents({}) == 0:
-        sdocs = []
-        for s in SYSTEM_SPLITS:
-            sdocs.append({"id": str(uuid.uuid4()), "user_id": None, **s})
-        await db.splits.insert_many(sdocs)
-        log.info(f"Seeded {len(sdocs)} splits")
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    client.close()
-
-
+# ── Health / CORS ────────────────────────────────────────────────────────────
 @api.get("/")
 async def health():
     return {"status": "ok", "service": "gymtrack"}
 
 
-# CORS - allow credentials for cookie-based auth.
-# When CORS_ORIGINS="*", we use allow_origin_regex to support credentials (browsers reject "*" + credentials).
 _origins_env = os.environ.get("CORS_ORIGINS", "*")
 if _origins_env.strip() == "*":
-    app.add_middleware(
-        CORSMiddleware,
-        allow_credentials=True,
-        allow_origin_regex=".*",
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origin_regex=".*", allow_methods=["*"], allow_headers=["*"])
 else:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_credentials=True,
-        allow_origins=_origins_env.split(","),
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=_origins_env.split(","), allow_methods=["*"], allow_headers=["*"])
 
 app.include_router(api)
+
+
+# ── Startup seed ─────────────────────────────────────────────────────────────
+@app.on_event("startup")
+async def startup():
+    ex_result = await _run(lambda: _t("exercises").select("id").limit(1).execute())
+    if not ex_result.data:
+        docs = [
+            {
+                "id": str(uuid.uuid4()),
+                "name": e["name"],
+                "category": e["category"],
+                "equipment": e["equipment"],
+                "movement": e["movement"],
+                "primary_muscles": e.get("primary", []),
+                "subgroups": e.get("subgroups", {}),
+                "youtube_id": e.get("youtube_id"),
+            }
+            for e in EXERCISES
+        ]
+        await _run(lambda: _t("exercises").insert(docs).execute())
+        log.info(f"Seeded {len(docs)} exercises")
+
+    sp_result = await _run(lambda: _t("splits").select("id").limit(1).execute())
+    if not sp_result.data:
+        sdocs = [
+            {
+                "id": str(uuid.uuid4()),
+                "name": s["name"],
+                "days_per_week": s.get("days_per_week", len(s.get("days", []))),
+                "days": s.get("days", []),
+            }
+            for s in SYSTEM_SPLITS
+        ]
+        await _run(lambda: _t("splits").insert(sdocs).execute())
+        log.info(f"Seeded {len(sdocs)} splits")
