@@ -1,11 +1,11 @@
 import { NavLink, useLocation } from "react-router-dom";
-import { Activity, Dumbbell, TrendingUp, MessageCircle, User } from "lucide-react";
+import { Activity, Dumbbell, TrendingUp, Sparkles, User } from "lucide-react";
 
 const tabs = [
   { to: "/today", label: "Today", icon: Activity, testid: "nav-today" },
   { to: "/exercises", label: "Library", icon: Dumbbell, testid: "nav-exercises" },
   { to: "/progress", label: "Progress", icon: TrendingUp, testid: "nav-progress" },
-  { to: "/chat", label: "Coach", icon: MessageCircle, testid: "nav-chat" },
+  { to: "/insights", label: "Insights", icon: Sparkles, testid: "nav-insights" },
   { to: "/settings", label: "Profile", icon: User, testid: "nav-settings" },
 ];
 

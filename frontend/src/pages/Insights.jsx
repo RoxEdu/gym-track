@@ -1,15 +1,39 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { Button } from "../components/ui/button";
-import { Sparkles, RefreshCw, ChevronDown, ChevronUp, ShieldCheck, ShieldAlert } from "lucide-react";
+import { Sparkles, RefreshCw, ChevronDown, ChevronUp, ShieldCheck, ShieldAlert, Send, Loader2, MessageCircle } from "lucide-react";
+
+const SUGGESTIONS = [
+  "How is my progress looking?",
+  "What should I focus on this week?",
+  "Which muscles am I undertrained in?",
+  "Explain my current split",
+  "How do I fix a missed workout?",
+  "When should I move to the next mesocycle?",
+];
 
 export default function Insights() {
+  const { user } = useAuth();
   const [data, setData] = useState({ insights: [], weekly_volume: {}, previous_weekly_volume: {}, landmarks: {}, recovery: {}, digest: null, streak_days: 0, weak_subgroups: [], top_movers: [] });
   const [generating, setGenerating] = useState(false);
-  const [expanded, setExpanded] = useState({}); // insight.id -> bool
+  const [expanded, setExpanded] = useState({});
   const [showDigestData, setShowDigestData] = useState(false);
+
+  // Coach chat state
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const bottomRef = useRef(null);
+  const inputRef = useRef(null);
+  const name = (user?.name || "").split(" ")[0] || "there";
+
   const load = () => api.get("/insights").then(r => setData(r.data));
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, chatLoading]);
 
   const generateDigest = async () => {
     setGenerating(true);
@@ -17,6 +41,31 @@ export default function Insights() {
       const r = await api.post("/insights/digest");
       setData((d) => ({ ...d, digest: r.data }));
     } finally { setGenerating(false); }
+  };
+
+  const send = async (text) => {
+    const content = (text || input).trim();
+    if (!content || chatLoading) return;
+    setInput("");
+
+    const userMsg = { role: "user", content };
+    const nextMessages = [...messages, userMsg];
+    setMessages(nextMessages);
+    setChatLoading(true);
+
+    try {
+      const r = await api.post("/chat", { messages: nextMessages });
+      setMessages([...nextMessages, { role: "assistant", content: r.data.message }]);
+    } catch {
+      setMessages([...nextMessages, { role: "assistant", content: "Something went wrong. Try again." }]);
+    } finally {
+      setChatLoading(false);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  };
+
+  const handleKey = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   };
 
   const digest = data.digest;
@@ -128,6 +177,85 @@ export default function Insights() {
             </div>
           );
         })}
+      </div>
+
+      {/* Coach chat */}
+      <div>
+        <div className="flex items-center gap-2 mb-3">
+          <MessageCircle size={13} className="text-primary" />
+          <div className="text-[10px] font-mono uppercase tracking-widest text-primary">Ask your coach</div>
+        </div>
+
+        <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+          {messages.length === 0 && (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">Hey {name} — ask me anything about your training, recovery, or program.</p>
+              <div className="space-y-2">
+                {SUGGESTIONS.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => send(s)}
+                    className="w-full text-left text-sm px-4 py-2.5 rounded-xl border border-border hover:border-primary/50 hover:bg-primary/5 transition-all font-mono text-muted-foreground"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {messages.length > 0 && (
+            <div className="space-y-3">
+              {messages.map((m, i) => (
+                <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div
+                    className={`max-w-[85%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+                      m.role === "user"
+                        ? "bg-primary text-primary-foreground rounded-br-sm"
+                        : "bg-secondary border border-border rounded-bl-sm"
+                    }`}
+                  >
+                    {m.content}
+                  </div>
+                </div>
+              ))}
+              {chatLoading && (
+                <div className="flex justify-start">
+                  <div className="bg-secondary border border-border px-4 py-3 rounded-2xl rounded-bl-sm flex items-center gap-2 text-muted-foreground">
+                    <Loader2 size={14} className="animate-spin" />
+                    <span className="text-sm font-mono">thinking…</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex gap-2 items-end pt-1">
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKey}
+              placeholder="Ask anything…"
+              rows={1}
+              className="flex-1 bg-secondary border border-border rounded-xl px-4 py-3 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-primary max-h-32"
+              style={{ fieldSizing: "content" }}
+            />
+            <button
+              onClick={() => send()}
+              disabled={!input.trim() || chatLoading}
+              className="w-11 h-11 bg-primary text-primary-foreground rounded-xl flex items-center justify-center disabled:opacity-40 transition-opacity flex-shrink-0"
+            >
+              <Send size={16} />
+            </button>
+          </div>
+          {messages.length > 0 && (
+            <p className="text-[10px] font-mono text-muted-foreground text-center">
+              Responses are AI-generated based on your actual training data.
+            </p>
+          )}
+          <div ref={bottomRef} />
+        </div>
       </div>
     </div>
   );
