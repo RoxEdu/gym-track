@@ -441,6 +441,109 @@ def compute_top_movers(current: Dict[str, float], previous: Dict[str, float], n:
     return sorted(deltas, key=lambda x: -abs(x["delta"]))[:n]
 
 
+# ==================== AI Split Generator ====================
+
+_SLOT_TEMPLATES: Dict[str, List[Dict]] = {
+    "chest": [
+        {"category": "chest", "movement": "push", "sets": 3, "rep_range": [6, 10]},
+        {"category": "chest", "movement": "isolation", "sets": 3, "rep_range": [10, 15]},
+    ],
+    "back": [
+        {"category": "back", "movement": "pull", "sets": 3, "rep_range": [6, 10]},
+        {"category": "back", "movement": "pull", "sets": 3, "rep_range": [8, 12]},
+    ],
+    "shoulders": [
+        {"category": "shoulders", "movement": "push", "sets": 3, "rep_range": [8, 12]},
+        {"category": "shoulders", "movement": "isolation", "sets": 3, "rep_range": [12, 20], "subgroup": "side_delts"},
+    ],
+    "arms": [
+        {"category": "arms", "movement": "isolation", "sets": 3, "rep_range": [8, 12], "subgroup": "biceps_short"},
+        {"category": "arms", "movement": "isolation", "sets": 3, "rep_range": [8, 12], "subgroup": "triceps_long"},
+    ],
+    "legs": [
+        {"category": "legs", "movement": "squat", "sets": 4, "rep_range": [6, 10]},
+        {"category": "legs", "movement": "hinge", "sets": 3, "rep_range": [8, 12]},
+        {"category": "legs", "movement": "isolation", "sets": 3, "rep_range": [10, 15], "subgroup": "calves"},
+    ],
+    "core": [
+        {"category": "core", "movement": "isolation", "sets": 3, "rep_range": [12, 20]},
+    ],
+}
+
+_VALID_CATEGORIES = {"chest", "back", "shoulders", "arms", "legs", "core"}
+
+
+def _slots_from_focus(muscle_focus: List[str]) -> List[Dict]:
+    slots = []
+    for muscle in muscle_focus:
+        slots.extend(_SLOT_TEMPLATES.get(muscle, []))
+    return slots
+
+
+async def generate_ai_split_structure(days_per_week: int, description: str, goal: str, experience: str) -> Dict:
+    """Use Groq to generate a workout split structure from the user's natural-language description."""
+    import json
+    import re
+
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        return {"error": "Groq API key not configured"}
+
+    try:
+        from groq import Groq
+        client = Groq(api_key=api_key)
+
+        system = (
+            "You are an expert strength coach. Respond ONLY with valid JSON — no markdown, no explanation."
+        )
+        prompt = (
+            f"Create a {days_per_week}-day workout split for a {experience} lifter whose goal is {goal}.\n"
+            f'User request: "{description}"\n\n'
+            f"Return ONLY this JSON structure (no other text):\n"
+            f'{{"name":"Split Name","description":"One sentence.","days":['
+            f'{{"day_index":0,"name":"Day Name","muscle_focus":["chest","shoulders"]}}]}}\n\n'
+            f"Rules:\n"
+            f"- Exactly {days_per_week} days with day_index 0 to {days_per_week - 1}\n"
+            f"- muscle_focus may only contain: chest, back, shoulders, arms, legs, core\n"
+            f"- Match the user request as closely as possible"
+        )
+
+        message = client.chat.completions.create(
+            model="mixtral-8x7b-32768",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.35,
+            max_tokens=600,
+        )
+        text = message.choices[0].message.content.strip()
+
+        json_match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not json_match:
+            return {"error": "Could not parse AI response"}
+
+        split_data = json.loads(json_match.group())
+        days = split_data.get("days", [])
+        if len(days) != days_per_week:
+            return {"error": f"AI returned {len(days)} days instead of {days_per_week}"}
+
+        for i, day in enumerate(days):
+            day["day_index"] = i
+            day["muscle_focus"] = [f for f in day.get("muscle_focus", []) if f in _VALID_CATEGORIES]
+            day["slots"] = _slots_from_focus(day["muscle_focus"])
+
+        return {
+            "name": split_data.get("name", f"Custom {days_per_week}-Day Split"),
+            "description": split_data.get("description", "AI-generated custom split"),
+            "frequency_per_week": days_per_week,
+            "days": days,
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def compute_recovery_score(stimulus_events: List[Dict]) -> Dict[str, float]:
     """Stimulus-fatigue model: each set adds stimulus that decays with half-life ~48h."""
     now = datetime.now(timezone.utc)

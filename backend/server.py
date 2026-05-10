@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, File, UploadFile
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -27,6 +27,7 @@ from services import (
     compute_streak_days,
     find_weak_subgroups,
     compute_top_movers,
+    generate_ai_split_structure,
 )
 
 ROOT_DIR = Path(__file__).parent
@@ -94,6 +95,13 @@ class BodyMeasurementPayload(BaseModel):
 class ProgramCreatePayload(BaseModel):
     split_id: str
     weeks: int = 4
+
+
+class AISplitPayload(BaseModel):
+    days_per_week: int
+    description: str
+    goal: str = "hypertrophy"
+    experience: str = "intermediate"
 
 
 # ── Auth ────────────────────────────────────────────────────────────────────
@@ -201,6 +209,29 @@ async def get_muscle_groups(user: Dict = Depends(get_current_user)):
 async def list_splits(user: Dict = Depends(get_current_user)):
     result = await _run(lambda: _t("splits").select("*").limit(50).execute())
     return result.data
+
+
+@api.post("/splits/generate-ai")
+async def generate_ai_split(payload: AISplitPayload, user: Dict = Depends(get_current_user)):
+    result = await generate_ai_split_structure(
+        days_per_week=payload.days_per_week,
+        description=payload.description,
+        goal=payload.goal,
+        experience=payload.experience,
+    )
+    if "error" in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    split_id = str(uuid.uuid4())
+    split = {
+        "id": split_id,
+        "name": result["name"],
+        "description": result["description"],
+        "frequency_per_week": result["frequency_per_week"],
+        "days": result["days"],
+    }
+    await _run(lambda: _t("splits").insert(split).execute())
+    return split
 
 
 @api.post("/programs")
@@ -450,6 +481,50 @@ async def list_measurements(user: Dict = Depends(get_current_user)):
     uid = user["id"]
     result = await _run(lambda: _t("body_measurements").select("*").eq("user_id", uid).order("recorded_at", desc=True).limit(500).execute())
     return result.data
+
+
+# ── Progress Photos ──────────────────────────────────────────────────────────
+@api.post("/progress-photos")
+async def upload_progress_photo(file: UploadFile = File(...), user: Dict = Depends(get_current_user)):
+    uid = user["id"]
+    content = await file.read()
+    ext = (file.filename or "photo.jpg").rsplit(".", 1)[-1].lower()
+    if ext not in {"jpg", "jpeg", "png", "heic", "webp"}:
+        ext = "jpg"
+    filename = f"{uid}/{uuid.uuid4()}.{ext}"
+    try:
+        sb.storage.from_("progress-photos").upload(filename, content, {"content-type": file.content_type or "image/jpeg"})
+        public_url = sb.storage.from_("progress-photos").get_public_url(filename)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+    now = datetime.now(timezone.utc).isoformat()
+    photo_id = str(uuid.uuid4())
+    await _run(lambda: _t("progress_photos").insert({
+        "id": photo_id, "user_id": uid, "url": public_url, "filename": filename, "created_at": now,
+    }).execute())
+    return {"id": photo_id, "url": public_url, "created_at": now}
+
+
+@api.get("/progress-photos")
+async def list_progress_photos(user: Dict = Depends(get_current_user)):
+    uid = user["id"]
+    result = await _run(lambda: _t("progress_photos").select("*").eq("user_id", uid).order("created_at", desc=True).limit(200).execute())
+    return result.data
+
+
+@api.delete("/progress-photos/{photo_id}")
+async def delete_progress_photo(photo_id: str, user: Dict = Depends(get_current_user)):
+    uid = user["id"]
+    result = await _run(lambda: _t("progress_photos").select("*").eq("id", photo_id).eq("user_id", uid).limit(1).execute())
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    filename = result.data[0]["filename"]
+    try:
+        sb.storage.from_("progress-photos").remove([filename])
+    except Exception:
+        pass
+    await _run(lambda: _t("progress_photos").delete().eq("id", photo_id).eq("user_id", uid).execute())
+    return {"ok": True}
 
 
 # ── Progress ─────────────────────────────────────────────────────────────────
