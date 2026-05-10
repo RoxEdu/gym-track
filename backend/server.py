@@ -802,8 +802,6 @@ if _origins_env.strip() == "*":
 else:
     app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=_origins_env.split(","), allow_methods=["*"], allow_headers=["*"])
 
-app.include_router(api)
-
 
 # ── AI Chat ──────────────────────────────────────────────────────────────────
 @api.post("/chat")
@@ -1003,3 +1001,5 @@ async def startup():
             log.info(f"Seeded {len(sdocs)} new splits")
     except Exception as e:
         log.warning(f"Split seeding skipped: {e}")
+
+app.include_router(api)
