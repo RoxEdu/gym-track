@@ -213,12 +213,12 @@ async def list_splits(user: Dict = Depends(get_current_user)):
 
 @api.post("/splits/generate-ai")
 async def generate_ai_split(payload: AISplitPayload, user: Dict = Depends(get_current_user)):
-    result = await generate_ai_split_structure(
+    result = await _run(lambda: generate_ai_split_structure(
         days_per_week=payload.days_per_week,
         description=payload.description,
         goal=payload.goal,
         experience=payload.experience,
-    )
+    ))
     if "error" in result:
         raise HTTPException(status_code=500, detail=result["error"])
 

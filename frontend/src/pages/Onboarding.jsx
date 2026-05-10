@@ -74,8 +74,9 @@ export default function Onboarding() {
         experience: data.experience,
       });
       setAiSplit(r.data);
-    } catch {
-      alert("Failed to generate split. Please try again.");
+    } catch (err) {
+      const msg = err?.response?.data?.detail || err?.message || "Unknown error";
+      alert(`Failed to generate split: ${msg}`);
     } finally {
       setAiLoading(false);
     }

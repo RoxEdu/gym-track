@@ -480,7 +480,7 @@ def _slots_from_focus(muscle_focus: List[str]) -> List[Dict]:
     return slots
 
 
-async def generate_ai_split_structure(days_per_week: int, description: str, goal: str, experience: str) -> Dict:
+def generate_ai_split_structure(days_per_week: int, description: str, goal: str, experience: str) -> Dict:
     """Use Groq to generate a workout split structure from the user's natural-language description."""
     import json
     import re
