@@ -31,6 +31,7 @@ from services import (
     build_chat_system_prompt,
     call_groq_chat,
     parse_coach_action,
+    detect_plan_intent,
     preview_reschedule_week,
     preview_remove_exercises,
     preview_add_volume,
@@ -859,6 +860,11 @@ async def chat(payload: ChatPayload, user: Dict = Depends(get_current_user)):
 
     raw_reply = await _run(lambda: call_groq_chat(messages))
     clean_reply, action_intent = parse_coach_action(raw_reply)
+
+    # Fallback: if the LLM didn't emit a tag, detect intent from the user's last message
+    if not action_intent:
+        last_user = next((m.content for m in reversed(payload.messages) if m.role == "user"), "")
+        action_intent = detect_plan_intent(last_user)
 
     action_preview: Optional[Dict] = None
     if action_intent:

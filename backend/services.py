@@ -644,6 +644,60 @@ def build_chat_system_prompt(
 
 # ── Coach action helpers ─────────────────────────────────────────────────────
 
+_MUSCLE_MAP = {
+    "hamstring": "hamstrings", "hamstrings": "hamstrings",
+    "quad": "quads", "quads": "quads", "quadricep": "quads",
+    "chest": "chest", "pec": "chest",
+    "back": "upper_back", "lats": "lats", "lat": "lats",
+    "lower back": "lower_back",
+    "shoulder": "side_delt", "delt": "side_delt",
+    "calf": "calves", "calves": "calves",
+    "bicep": "biceps", "biceps": "biceps",
+    "tricep": "triceps", "triceps": "triceps",
+    "glute": "glutes", "glutes": "glutes", "hip": "glutes",
+    "knee": "quads", "wrist": "biceps", "elbow": "triceps",
+}
+
+
+def detect_plan_intent(user_message: str) -> Optional[Dict]:
+    """Detect scheduling/injury/volume intent from the user's message via keyword matching.
+    Used as a fallback when the LLM doesn't emit a proper <action> tag."""
+    text = user_message.lower().strip()
+
+    # ── Reschedule week ──────────────────────────────────────────────────────
+    day_patterns = [
+        r'(?:only|just|can only|have only|only have|limited to)\s+(\d)\s*days?',
+        r'(\d)\s*days?\s+(?:this|a|per)\s+week',
+        r'(?:train|workout|work\s*out|exercise|go to gym)\s+(?:only\s+)?(\d)\s*days?',
+        r'(\d)\s*days?\s+(?:available|left|only|remaining)',
+        r'reduce.*?(\d)\s*days?',
+    ]
+    for pat in day_patterns:
+        m = re.search(pat, text)
+        if m:
+            days = int(m.group(1))
+            if 1 <= days <= 6:
+                return {"type": "reschedule_week", "days": days}
+
+    # ── Injury / avoid muscle ────────────────────────────────────────────────
+    injury_words = ["injur", "hurt", "pain", "sore", "strain", "sprain", "torn",
+                    "avoid", "skip", "rest my", "can't use", "cannot use", "bad knee",
+                    "bad shoulder", "bad back"]
+    if any(w in text for w in injury_words):
+        for key, val in _MUSCLE_MAP.items():
+            if key in text:
+                return {"type": "remove_exercises", "muscle_groups": [val]}
+
+    # ── Add volume / lagging muscle ──────────────────────────────────────────
+    volume_words = ["not growing", "not getting bigger", "lagging", "weak point",
+                    "need more", "focus more on", "improve my", "bring up", "prioritize"]
+    if any(w in text for w in volume_words):
+        for key, val in _MUSCLE_MAP.items():
+            if key in text:
+                return {"type": "add_volume", "muscle_groups": [val], "extra_sets": 2}
+
+    return None
+
 MUSCLE_ALIASES: Dict[str, List[str]] = {
     "chest": ["chest"], "pecs": ["chest"],
     "back": ["upper_back", "lats", "lower_back"], "lats": ["lats"], "upper back": ["upper_back"],
