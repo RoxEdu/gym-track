@@ -355,8 +355,11 @@ async def generate_llm_weekly_digest(user_name: str, weekly_volume: Dict[str, fl
         )
 
         client = Groq(api_key=api_key)
+        model = _pick_groq_model(client)
+        if not model:
+            return {"text": fallback_text, "source": "fallback", "allowed_numbers": sorted(allowed_numbers)}
         message = client.chat.completions.create(
-            model="llama-3.1-70b-versatile",
+            model=model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt}
@@ -510,8 +513,11 @@ def generate_ai_split_structure(days_per_week: int, description: str, goal: str,
             f"- Match the user request as closely as possible"
         )
 
+        model = _pick_groq_model(client)
+        if not model:
+            return {"error": "No usable models on this Groq account"}
         message = client.chat.completions.create(
-            model="llama-3.1-70b-versatile",
+            model=model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
@@ -798,29 +804,42 @@ def preview_add_volume(planned_workouts: List[Dict], muscle_groups: List[str], e
     return {"summary": "\n".join(lines), "additions": additions, "muscle_groups": list(subgroups), "extra_sets": extra_sets}
 
 
+def _pick_groq_model(client) -> Optional[str]:
+    """Return the best available chat model on this Groq account."""
+    try:
+        available = {m.id for m in client.models.list().data}
+        # Prefer larger/more capable models; skip embedding/vision/whisper models
+        skip = ("embed", "vision", "whisper", "tts", "guard")
+        chat_models = [m for m in available if not any(s in m.lower() for s in skip)]
+        # Rank by preference keywords
+        for keyword in ("70b", "8b", "versatile", "instant"):
+            for m in sorted(chat_models):
+                if keyword in m.lower():
+                    return m
+        return chat_models[0] if chat_models else None
+    except Exception:
+        return None
+
+
 def call_groq_chat(messages: List[Dict]) -> str:
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
         return "Chat is not configured (missing GROQ_API_KEY)."
     from groq import Groq
     client = Groq(api_key=api_key)
-    models = [
-        "llama-3.1-70b-versatile",
-        "llama3-70b-8192",
-    ]
-    errors: List[str] = []
-    for model in models:
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=0.6,
-                max_tokens=600,
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            errors.append(f"{model}: {e}")
-    return "Sorry, I couldn't reach the AI right now. Tried: " + " | ".join(errors)
+    model = _pick_groq_model(client)
+    if not model:
+        return "No usable models found on this Groq account."
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.6,
+            max_tokens=600,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"Sorry, I couldn't reach the AI right now. (model={model}, error={e})"
 
 
 def compute_recovery_score(stimulus_events: List[Dict]) -> Dict[str, float]:
