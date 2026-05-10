@@ -807,16 +807,19 @@ async def startup():
         await _run(lambda: _t("exercises").insert(docs).execute())
         log.info(f"Seeded {len(docs)} exercises")
 
-    sp_result = await _run(lambda: _t("splits").select("id").limit(1).execute())
-    if not sp_result.data:
+    sp_result = await _run(lambda: _t("splits").select("name").limit(200).execute())
+    existing_names = {s["name"] for s in (sp_result.data or [])}
+    missing = [s for s in SYSTEM_SPLITS if s["name"] not in existing_names]
+    if missing:
         sdocs = [
             {
                 "id": str(uuid.uuid4()),
                 "name": s["name"],
+                "description": s.get("description", ""),
                 "days_per_week": s.get("days_per_week", len(s.get("days", []))),
                 "days": s.get("days", []),
             }
-            for s in SYSTEM_SPLITS
+            for s in missing
         ]
         await _run(lambda: _t("splits").insert(sdocs).execute())
-        log.info(f"Seeded {len(sdocs)} splits")
+        log.info(f"Seeded {len(sdocs)} new splits")

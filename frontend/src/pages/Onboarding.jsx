@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { Button } from "../components/ui/button";
-import { ChevronRight, ChevronLeft, Sparkles, Loader2 } from "lucide-react";
+import { ChevronRight, ChevronLeft, Loader2 } from "lucide-react";
 
 const STEPS = [
   "welcome", "sex", "units", "age", "height", "weight",
@@ -22,10 +22,6 @@ export default function Onboarding() {
   });
   const [splits, setSplits] = useState([]);
   const [selectedSplit, setSelectedSplit] = useState(null);
-  const [aiMode, setAiMode] = useState(false);
-  const [aiPrompt, setAiPrompt] = useState("");
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiSplit, setAiSplit] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
   const d = (update) => setData((prev) => ({ ...prev, ...update }));
@@ -41,9 +37,8 @@ export default function Onboarding() {
       setSubmitting(true);
       try {
         await api.put("/profile/onboarding", data);
-        const splitId = aiMode ? aiSplit?.id : selectedSplit;
-        if (splitId) {
-          await api.post("/programs", { split_id: splitId, weeks: 4 });
+        if (selectedSplit) {
+          await api.post("/programs", { split_id: selectedSplit, weeks: 4 });
         }
         await refresh();
         navigate("/today", { replace: true });
@@ -55,32 +50,7 @@ export default function Onboarding() {
     setStep(step + 1);
   };
 
-  const back = () => {
-    if (aiMode && STEPS[step] === "split") {
-      setAiMode(false);
-      setAiSplit(null);
-      return;
-    }
-    setStep(Math.max(0, step - 1));
-  };
-
-  const generateAiSplit = async () => {
-    setAiLoading(true);
-    try {
-      const r = await api.post("/splits/generate-ai", {
-        days_per_week: data.days_per_week,
-        description: aiPrompt,
-        goal: data.goal,
-        experience: data.experience,
-      });
-      setAiSplit(r.data);
-    } catch (err) {
-      const msg = err?.response?.data?.detail || err?.message || "Unknown error";
-      alert(`Failed to generate split: ${msg}`);
-    } finally {
-      setAiLoading(false);
-    }
-  };
+  const back = () => setStep(Math.max(0, step - 1));
 
   const cmToDisplay = (cm) => {
     if (data.units === "kg") return `${cm} cm`;
@@ -298,62 +268,18 @@ export default function Onboarding() {
           </div>
         );
 
-      case "split":
-        if (aiMode) {
-          return (
-            <div className="space-y-5">
-              <div className="text-xs font-mono uppercase tracking-[0.4em] text-primary">/ ai split</div>
-              <h2 className="font-display text-4xl font-bold">Describe your ideal split.</h2>
-              <p className="text-sm text-muted-foreground">
-                e.g. <span className="font-mono text-foreground">"Upper, Lower, Push, Pull, Legs, Arms"</span> or <span className="font-mono text-foreground">"chest-focused push day + dedicated arms day"</span>
-              </p>
-              <textarea
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                placeholder="Describe your split..."
-                className="w-full bg-secondary border border-border rounded-xl p-4 font-mono text-sm resize-none h-28 focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-              {aiSplit && (
-                <div className="bg-primary/5 border-2 border-primary rounded-2xl p-4 space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Sparkles size={16} className="text-primary" />
-                    <div className="font-display text-lg font-bold text-primary">{aiSplit.name}</div>
-                  </div>
-                  <div className="text-sm text-muted-foreground">{aiSplit.description}</div>
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {aiSplit.days.map((day) => (
-                      <span key={day.day_index} className="text-xs font-mono bg-background border border-border px-2.5 py-1 rounded-full">{day.name}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <Button
-                onClick={generateAiSplit}
-                disabled={!aiPrompt.trim() || aiLoading}
-                className="w-full py-6 font-mono uppercase tracking-wider"
-              >
-                {aiLoading ? <Loader2 size={16} className="animate-spin mr-2" /> : <Sparkles size={16} className="mr-2" />}
-                {aiLoading ? "Generating..." : aiSplit ? "Regenerate" : "Generate Split"}
-              </Button>
-            </div>
-          );
-        }
+      case "split": {
+        const filtered = splits.filter(s => s.days_per_week === data.days_per_week);
         return (
           <div className="space-y-4">
             <div className="text-xs font-mono uppercase tracking-[0.4em] text-primary">/ split</div>
             <h2 className="font-display text-4xl font-bold">Pick a split.</h2>
-            <button
-              onClick={() => { setAiMode(true); setAiSplit(null); }}
-              className="w-full flex items-center gap-3 p-4 rounded-2xl border-2 border-dashed border-primary/40 text-primary hover:border-primary hover:bg-primary/5 transition-all"
-            >
-              <Sparkles size={20} />
-              <div className="text-left">
-                <div className="font-display text-lg font-semibold">AI Custom Split</div>
-                <div className="text-xs text-muted-foreground font-mono">Describe exactly what you want</div>
-              </div>
-            </button>
+            <p className="text-sm text-muted-foreground font-mono">{data.days_per_week} days/week</p>
             <div className="space-y-2">
-              {splits.map((s) => (
+              {filtered.length === 0 && (
+                <div className="text-xs text-muted-foreground font-mono p-4 text-center">Loading splits…</div>
+              )}
+              {filtered.map((s) => (
                 <button
                   key={s.id}
                   data-testid={`onboarding-split-${s.id}`}
@@ -362,14 +288,19 @@ export default function Onboarding() {
                 >
                   <div className="flex justify-between items-center mb-1">
                     <div className="font-display text-xl font-semibold">{s.name}</div>
-                    <div className="text-xs font-mono text-muted-foreground">{s.frequency_per_week}×/week</div>
                   </div>
                   <div className="text-sm text-muted-foreground">{s.description}</div>
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {(s.days || []).map((day) => (
+                      <span key={day.day_index} className="text-[10px] font-mono bg-secondary px-2 py-0.5 rounded-full text-muted-foreground">{day.name}</span>
+                    ))}
+                  </div>
                 </button>
               ))}
             </div>
           </div>
         );
+      }
 
       default:
         return null;
@@ -377,7 +308,7 @@ export default function Onboarding() {
   };
 
   const canProceed = () => {
-    if (STEPS[step] === "split") return aiMode ? !!aiSplit : !!selectedSplit;
+    if (STEPS[step] === "split") return !!selectedSplit;
     if (STEPS[step] === "equipment") return data.equipment.length > 0;
     return true;
   };
