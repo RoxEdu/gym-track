@@ -356,7 +356,7 @@ async def generate_llm_weekly_digest(user_name: str, weekly_volume: Dict[str, fl
 
         client = Groq(api_key=api_key)
         message = client.chat.completions.create(
-            model="mixtral-8x7b-32768",
+            model="llama-3.1-70b-versatile",
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt}
@@ -511,7 +511,7 @@ def generate_ai_split_structure(days_per_week: int, description: str, goal: str,
         )
 
         message = client.chat.completions.create(
-            model="mixtral-8x7b-32768",
+            model="llama-3.1-70b-versatile",
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
@@ -804,13 +804,9 @@ def call_groq_chat(messages: List[Dict]) -> str:
         return "Chat is not configured (missing GROQ_API_KEY)."
     from groq import Groq
     client = Groq(api_key=api_key)
-    # Try models newest-first; skip deprecated ones
     models = [
-        "llama-3.3-70b-versatile",
         "llama-3.1-70b-versatile",
         "llama3-70b-8192",
-        "llama3-8b-8192",
-        "gemma2-9b-it",
     ]
     errors: List[str] = []
     for model in models:
