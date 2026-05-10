@@ -269,17 +269,17 @@ export default function Onboarding() {
         );
 
       case "split": {
-        const filtered = splits.filter(s => s.days_per_week === data.days_per_week);
+        const sorted = [...splits].sort((a, b) => (a.days_per_week || 0) - (b.days_per_week || 0));
         return (
           <div className="space-y-4">
             <div className="text-xs font-mono uppercase tracking-[0.4em] text-primary">/ split</div>
-            <h2 className="font-display text-4xl font-bold">Pick a split.</h2>
-            <p className="text-sm text-muted-foreground font-mono">{data.days_per_week} days/week</p>
+            <h2 className="font-display text-4xl font-bold">Pick any split.</h2>
+            <p className="text-sm text-muted-foreground">Choose whatever structure suits you — ignore the day count if you want.</p>
             <div className="space-y-2">
-              {filtered.length === 0 && (
+              {sorted.length === 0 && (
                 <div className="text-xs text-muted-foreground font-mono p-4 text-center">Loading splits…</div>
               )}
-              {filtered.map((s) => (
+              {sorted.map((s) => (
                 <button
                   key={s.id}
                   data-testid={`onboarding-split-${s.id}`}
@@ -288,9 +288,10 @@ export default function Onboarding() {
                 >
                   <div className="flex justify-between items-center mb-1">
                     <div className="font-display text-xl font-semibold">{s.name}</div>
+                    <span className="text-xs font-mono text-muted-foreground bg-secondary px-2 py-0.5 rounded-full flex-shrink-0">{s.days_per_week}d/wk</span>
                   </div>
-                  <div className="text-sm text-muted-foreground">{s.description}</div>
-                  <div className="flex flex-wrap gap-1 mt-2">
+                  <div className="text-sm text-muted-foreground mb-2">{s.description}</div>
+                  <div className="flex flex-wrap gap-1">
                     {(s.days || []).map((day) => (
                       <span key={day.day_index} className="text-[10px] font-mono bg-secondary px-2 py-0.5 rounded-full text-muted-foreground">{day.name}</span>
                     ))}
