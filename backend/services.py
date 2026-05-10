@@ -544,6 +544,75 @@ def generate_ai_split_structure(days_per_week: int, description: str, goal: str,
         return {"error": str(e)}
 
 
+# ==================== AI Chat ====================
+
+def build_chat_system_prompt(user: Dict, program: Dict, workouts: List[Dict], prs: List[Dict]) -> str:
+    name = (user.get("name") or "Athlete").split()[0]
+    goal = user.get("goal", "hypertrophy")
+    experience = user.get("experience", "intermediate")
+    days = user.get("days_per_week", 4)
+    weight = user.get("weight_kg")
+    units = user.get("units", "kg")
+
+    lines = [
+        f"You are a knowledgeable, concise personal trainer coaching {name}.",
+        "",
+        "ATHLETE PROFILE:",
+        f"- Goal: {goal}",
+        f"- Experience: {experience}",
+        f"- Training {days} days/week",
+    ]
+    if weight:
+        lines.append(f"- Body weight: {weight} {units}")
+
+    if program:
+        lines += [
+            "",
+            "ACTIVE PROGRAM:",
+            f"- Split: {program.get('split_name', 'unknown')}",
+            f"- Week {(program.get('current_week') or 0) + 1} of {program.get('weeks', 4)}",
+        ]
+
+    if workouts:
+        lines += ["", "RECENT WORKOUTS (most recent first):"]
+        for w in workouts[:6]:
+            date = (w.get("completed_at") or "")[:10]
+            lines.append(f"- {w.get('name', 'Workout')} ({date})")
+
+    if prs:
+        lines += ["", "TOP PERSONAL RECORDS:"]
+        for pr in prs[:8]:
+            lines.append(f"- {pr.get('exercise_name')}: {pr.get('weight')}{units} × {pr.get('reps')} reps (e1RM {pr.get('e1rm')}{units})")
+
+    lines += [
+        "",
+        "INSTRUCTIONS:",
+        "- Answer in 2-4 short paragraphs max. Be specific and reference their data.",
+        "- If asked about missed workouts: the app has a 'Redistribute missed' button in Settings.",
+        "- If asked about split changes: tell them to use Settings → Switch Split.",
+        "- Do not make up numbers not present in the data above.",
+    ]
+    return "\n".join(lines)
+
+
+def call_groq_chat(messages: List[Dict]) -> str:
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        return "Chat is not configured (missing API key)."
+    try:
+        from groq import Groq
+        client = Groq(api_key=api_key)
+        response = client.chat.completions.create(
+            model="mixtral-8x7b-32768",
+            messages=messages,
+            temperature=0.6,
+            max_tokens=400,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"Sorry, I couldn't process that right now. ({e})"
+
+
 def compute_recovery_score(stimulus_events: List[Dict]) -> Dict[str, float]:
     """Stimulus-fatigue model: each set adds stimulus that decays with half-life ~48h."""
     now = datetime.now(timezone.utc)

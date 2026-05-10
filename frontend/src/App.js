@@ -17,6 +17,7 @@ import Progress from "./pages/Progress";
 import Insights from "./pages/Insights";
 import Settings from "./pages/Settings";
 import Mesocycle from "./pages/Mesocycle";
+import Chat from "./pages/Chat";
 
 function AppRouter() {
   return (
@@ -32,6 +33,7 @@ function AppRouter() {
       <Route path="/insights" element={<ProtectedRoute><AppShell><Insights /></AppShell></ProtectedRoute>} />
       <Route path="/mesocycle" element={<ProtectedRoute><AppShell><Mesocycle /></AppShell></ProtectedRoute>} />
       <Route path="/settings" element={<ProtectedRoute><AppShell><Settings /></AppShell></ProtectedRoute>} />
+      <Route path="/chat" element={<ProtectedRoute><AppShell><Chat /></AppShell></ProtectedRoute>} />
       <Route path="/" element={<Navigate to="/today" replace />} />
       <Route path="*" element={<Navigate to="/today" replace />} />
     </Routes>

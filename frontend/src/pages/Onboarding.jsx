@@ -362,8 +362,10 @@ export default function Onboarding() {
 }
 
 function SliderField({ value, min, max, step = 1, displayValue, unit, testid, onChange }) {
+  const dec = () => onChange(Math.max(min, Math.round((value - step) / step) * step));
+  const inc = () => onChange(Math.min(max, Math.round((value + step) / step) * step));
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <div className="font-display text-6xl font-bold tabular-nums">
         {typeof displayValue === "string" ? displayValue : (
           <>
@@ -383,9 +385,19 @@ function SliderField({ value, min, max, step = 1, displayValue, unit, testid, on
         className="w-full h-2 rounded-full cursor-pointer"
         style={{ accentColor: "hsl(var(--primary))" }}
       />
-      <div className="flex justify-between text-xs font-mono text-muted-foreground">
-        <span>{min}</span>
-        <span>{max}</span>
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-mono text-muted-foreground">{min}</span>
+        <div className="flex items-center gap-4">
+          <button
+            onClick={dec}
+            className="w-12 h-12 rounded-full border-2 border-border flex items-center justify-center text-2xl font-mono hover:border-primary hover:text-primary transition-colors"
+          >−</button>
+          <button
+            onClick={inc}
+            className="w-12 h-12 rounded-full border-2 border-border flex items-center justify-center text-2xl font-mono hover:border-primary hover:text-primary transition-colors"
+          >+</button>
+        </div>
+        <span className="text-xs font-mono text-muted-foreground">{max}</span>
       </div>
     </div>
   );

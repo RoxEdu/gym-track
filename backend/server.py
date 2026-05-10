@@ -28,6 +28,8 @@ from services import (
     find_weak_subgroups,
     compute_top_movers,
     generate_ai_split_structure,
+    build_chat_system_prompt,
+    call_groq_chat,
 )
 
 ROOT_DIR = Path(__file__).parent
@@ -102,6 +104,14 @@ class AISplitPayload(BaseModel):
     description: str
     goal: str = "hypertrophy"
     experience: str = "intermediate"
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatPayload(BaseModel):
+    messages: List[ChatMessage]
 
 
 # ── Auth ────────────────────────────────────────────────────────────────────
@@ -784,6 +794,28 @@ else:
     app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=_origins_env.split(","), allow_methods=["*"], allow_headers=["*"])
 
 app.include_router(api)
+
+
+# ── AI Chat ──────────────────────────────────────────────────────────────────
+@api.post("/chat")
+async def chat(payload: ChatPayload, user: Dict = Depends(get_current_user)):
+    uid = user["id"]
+    workouts_r, prs_r = await asyncio.gather(
+        _run(lambda: _t("workouts").select("name,completed_at").eq("user_id", uid).eq("status", "completed").order("completed_at", desc=True).limit(8).execute()),
+        _run(lambda: _t("personal_records").select("*").eq("user_id", uid).order("e1rm", desc=True).limit(10).execute()),
+    )
+    program = None
+    pid = user.get("active_program_id")
+    if pid:
+        p_r = await _run(lambda: _t("programs").select("split_name,current_week,weeks").eq("id", pid).limit(1).execute())
+        program = p_r.data[0] if p_r.data else None
+
+    system_prompt = build_chat_system_prompt(user, program, workouts_r.data or [], prs_r.data or [])
+    messages = [{"role": "system", "content": system_prompt}]
+    messages += [{"role": m.role, "content": m.content} for m in payload.messages]
+
+    reply = await _run(lambda: call_groq_chat(messages))
+    return {"message": reply}
 
 
 # ── Startup seed ─────────────────────────────────────────────────────────────
