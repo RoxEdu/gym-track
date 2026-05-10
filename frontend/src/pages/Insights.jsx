@@ -62,8 +62,9 @@ export default function Insights() {
       const r = await api.post("/chat", { messages: nextMessages });
       setMessages([...nextMessages, { role: "assistant", content: r.data.message }]);
       if (r.data.action) setPendingAction(r.data.action);
-    } catch {
-      setMessages([...nextMessages, { role: "assistant", content: "Something went wrong. Try again." }]);
+    } catch (err) {
+      const detail = err?.response?.data?.detail || err?.response?.status || err?.message || "unknown";
+      setMessages([...nextMessages, { role: "assistant", content: `Error: ${detail}` }]);
     } finally {
       setChatLoading(false);
       setTimeout(() => inputRef.current?.focus(), 50);
