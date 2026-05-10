@@ -802,13 +802,19 @@ def call_groq_chat(messages: List[Dict]) -> str:
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
         return "Chat is not configured (missing GROQ_API_KEY)."
-    # Try models in order until one succeeds
-    models = ["llama-3.1-70b-versatile", "llama3-70b-8192", "mixtral-8x7b-32768"]
-    last_err = None
+    from groq import Groq
+    client = Groq(api_key=api_key)
+    # Try models newest-first; skip deprecated ones
+    models = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-70b-versatile",
+        "llama3-70b-8192",
+        "llama3-8b-8192",
+        "gemma2-9b-it",
+    ]
+    errors: List[str] = []
     for model in models:
         try:
-            from groq import Groq
-            client = Groq(api_key=api_key)
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
@@ -817,9 +823,8 @@ def call_groq_chat(messages: List[Dict]) -> str:
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
-            last_err = e
-            continue
-    return f"Sorry, I couldn't process that right now. ({last_err})"
+            errors.append(f"{model}: {e}")
+    return "Sorry, I couldn't reach the AI right now. Tried: " + " | ".join(errors)
 
 
 def compute_recovery_score(stimulus_events: List[Dict]) -> Dict[str, float]:
