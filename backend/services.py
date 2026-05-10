@@ -617,24 +617,17 @@ def build_chat_system_prompt(
     lines += [
         "",
         "PLAN MODIFICATION — use when user requests it:",
-        "You can propose workout plan changes. Include ONE <action> tag when appropriate:",
+        "When proposing a plan change, end your message with EXACTLY one of these tags (use angle brackets < >, not square brackets):",
         "",
-        "  Fewer training days this week:",
-        '  <action>{"type":"reschedule_week","days":N}</action>',
-        "",
-        "  Injury / avoid a muscle group:",
-        '  <action>{"type":"remove_exercises","muscle_groups":["hamstrings"]}</action>',
-        "",
-        "  Lagging muscle — add volume:",
-        '  <action>{"type":"add_volume","muscle_groups":["chest"],"extra_sets":2}</action>',
+        '  <action>{"type":"reschedule_week","days":N}</action>  ← fewer days this week',
+        '  <action>{"type":"remove_exercises","muscle_groups":["hamstrings"]}</action>  ← injury',
+        '  <action>{"type":"add_volume","muscle_groups":["chest"],"extra_sets":2}</action>  ← lagging muscle',
         "",
         "RULES:",
-        "- Only propose an action when the user is clearly requesting a plan change.",
-        "- Always explain what you will do BEFORE the <action> tag.",
-        "- The user will see a confirmation card — nothing changes without their approval.",
-        "- Do not invent exercise names. The system handles the exact exercises.",
-        "- Answer in 2-4 short paragraphs. Be specific and reference their data.",
-        "- Do not make up numbers not present in the data above.",
+        "- Only include an <action> tag when the user clearly wants a plan change.",
+        "- Keep your message brief (2-3 sentences). The app shows a confirmation card — user approves before anything changes.",
+        "- NEVER use [ ] brackets for the action tag. Always use < > angle brackets.",
+        "- Do not invent exercise names. Do not make up numbers not in the data above.",
     ]
     return "\n".join(lines)
 
@@ -670,13 +663,25 @@ def resolve_muscle_groups(names: List[str]) -> List[str]:
 
 
 def parse_coach_action(text: str) -> Tuple[str, Optional[Dict]]:
-    """Extract <action>JSON</action> from LLM response. Returns (clean_text, action_dict)."""
-    match = re.search(r"<action>(.*?)</action>", text, re.DOTALL)
+    """Extract action JSON from LLM response.
+    Handles <action>...</action>, [action>...</action>, and similar variants LLMs produce."""
+    # Flexible pattern: opening bracket ([/<), "action", closing bracket (]/>) then content then closing tag
+    match = re.search(r"[\[<]action[\]>](.*?)[\[<]/action[\]>]?", text, re.DOTALL | re.IGNORECASE)
     if not match:
-        return text, None
+        # Fallback: find a raw JSON object containing our known action types
+        match = re.search(
+            r'\{"type"\s*:\s*"(?:reschedule_week|remove_exercises|add_volume)"[^}]*\}',
+            text, re.DOTALL
+        )
+        if not match:
+            return text, None
+        json_str = match.group(0)
+    else:
+        json_str = match.group(1).strip()
+
     clean = (text[: match.start()] + text[match.end() :]).strip()
     try:
-        return clean, json.loads(match.group(1).strip())
+        return clean, json.loads(json_str)
     except Exception:
         return text, None
 
