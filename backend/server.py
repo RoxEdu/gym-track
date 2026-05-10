@@ -811,33 +811,49 @@ async def chat(payload: ChatPayload, user: Dict = Depends(get_current_user)):
     uid = user["id"]
     pid = user.get("active_program_id")
 
-    now = datetime.now(timezone.utc)
-    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-    week_end = week_start + timedelta(days=7)
-
-    recent_r, prs_r = await asyncio.gather(
-        _run(lambda: _t("workouts").select("name,completed_at").eq("user_id", uid).eq("status", "completed").order("completed_at", desc=True).limit(8).execute()),
-        _run(lambda: _t("personal_records").select("*").eq("user_id", uid).order("e1rm", desc=True).limit(10).execute()),
-    )
+    # Fetch recent workouts and PRs (non-fatal if either fails)
+    try:
+        recent_r, prs_r = await asyncio.gather(
+            _run(lambda: _t("workouts").select("name,completed_at").eq("user_id", uid).eq("status", "completed").order("completed_at", desc=True).limit(8).execute()),
+            _run(lambda: _t("personal_records").select("*").eq("user_id", uid).order("e1rm", desc=True).limit(10).execute()),
+        )
+        recent_workouts = recent_r.data or []
+        prs = prs_r.data or []
+    except Exception as e:
+        log.warning(f"Chat context fetch failed: {e}")
+        recent_workouts, prs = [], []
 
     week_completed: List[Dict] = []
     week_planned: List[Dict] = []
     program = None
 
     if pid:
-        p_r, week_r = await asyncio.gather(
-            _run(lambda: _t("programs").select("split_name,current_week,weeks").eq("id", pid).limit(1).execute()),
-            _run(lambda: _t("workouts").select("id,name,status,scheduled_date,exercises").eq("user_id", uid).eq("program_id", pid).gte("scheduled_date", week_start.isoformat()).lte("scheduled_date", week_end.isoformat()).order("scheduled_date").execute()),
-        )
-        program = p_r.data[0] if p_r.data else None
-        for w in week_r.data or []:
-            if w["status"] == "completed":
-                week_completed.append(w)
-            elif w["status"] in ("scheduled", "in_progress"):
-                week_planned.append(w)
+        try:
+            now = datetime.now(timezone.utc)
+            week_start_str = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
+            week_end_str = (now + timedelta(days=7 - now.weekday())).strftime("%Y-%m-%d")
+
+            p_r, week_r = await asyncio.gather(
+                _run(lambda: _t("programs").select("split_name,current_week,weeks").eq("id", pid).limit(1).execute()),
+                _run(lambda: _t("workouts").select("id,name,status,scheduled_date,exercises").eq("user_id", uid).eq("program_id", pid).gte("scheduled_date", week_start_str).lte("scheduled_date", week_end_str).order("scheduled_date").execute()),
+            )
+            program = p_r.data[0] if p_r.data else None
+            for w in week_r.data or []:
+                if w["status"] == "completed":
+                    week_completed.append(w)
+                elif w["status"] in ("scheduled", "in_progress"):
+                    week_planned.append(w)
+        except Exception as e:
+            log.warning(f"Chat week context fetch failed: {e}")
+            # Fall back to program-only context
+            try:
+                p_r = await _run(lambda: _t("programs").select("split_name,current_week,weeks").eq("id", pid).limit(1).execute())
+                program = p_r.data[0] if p_r.data else None
+            except Exception:
+                pass
 
     system_prompt = build_chat_system_prompt(
-        user, program, recent_r.data or [], prs_r.data or [],
+        user, program, recent_workouts, prs,
         week_completed=week_completed, week_planned=week_planned,
     )
     messages = [{"role": "system", "content": system_prompt}]
@@ -856,8 +872,7 @@ async def chat(payload: ChatPayload, user: Dict = Depends(get_current_user)):
             elif atype == "remove_exercises":
                 mg = action_intent.get("muscle_groups", [])
                 exs_r = await _run(lambda: _t("exercises").select("*").limit(500).execute())
-                upcoming = week_planned  # could extend to next week's workouts too
-                action_preview = {"type": atype, **preview_remove_exercises(upcoming, mg, exs_r.data or [])}
+                action_preview = {"type": atype, **preview_remove_exercises(week_planned, mg, exs_r.data or [])}
             elif atype == "add_volume":
                 mg = action_intent.get("muscle_groups", [])
                 extra = int(action_intent.get("extra_sets", 2))

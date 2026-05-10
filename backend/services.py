@@ -801,19 +801,25 @@ def preview_add_volume(planned_workouts: List[Dict], muscle_groups: List[str], e
 def call_groq_chat(messages: List[Dict]) -> str:
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        return "Chat is not configured (missing API key)."
-    try:
-        from groq import Groq
-        client = Groq(api_key=api_key)
-        response = client.chat.completions.create(
-            model="mixtral-8x7b-32768",
-            messages=messages,
-            temperature=0.6,
-            max_tokens=400,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        return f"Sorry, I couldn't process that right now. ({e})"
+        return "Chat is not configured (missing GROQ_API_KEY)."
+    # Try models in order until one succeeds
+    models = ["llama-3.1-70b-versatile", "llama3-70b-8192", "mixtral-8x7b-32768"]
+    last_err = None
+    for model in models:
+        try:
+            from groq import Groq
+            client = Groq(api_key=api_key)
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0.6,
+                max_tokens=600,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            last_err = e
+            continue
+    return f"Sorry, I couldn't process that right now. ({last_err})"
 
 
 def compute_recovery_score(stimulus_events: List[Dict]) -> Dict[str, float]:
