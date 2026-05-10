@@ -60,7 +60,10 @@ export default function Insights() {
 
     try {
       const r = await api.post("/chat", { messages: nextMessages });
-      setMessages([...nextMessages, { role: "assistant", content: r.data.message }]);
+      const debugSuffix = r.data.action
+        ? `\n\n[DEBUG action=${r.data.action.type} summary="${(r.data.action.summary||"").slice(0,80)}"]`
+        : "\n\n[DEBUG no action detected]";
+      setMessages([...nextMessages, { role: "assistant", content: r.data.message + debugSuffix }]);
       if (r.data.action) setPendingAction(r.data.action);
     } catch (err) {
       const detail = err?.response?.data?.detail || err?.response?.status || err?.message || "unknown";
@@ -250,6 +253,42 @@ export default function Insights() {
                   </div>
                 </div>
               ))}
+
+              {/* Proposal card inline in thread — auto-scrolled to by bottomRef */}
+              {pendingAction && (
+                <div className="border-2 border-primary bg-primary/10 rounded-2xl p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Sparkles size={14} className="text-primary" />
+                    <span className="text-xs font-mono font-bold uppercase tracking-widest text-primary">Coach proposal — tap to apply</span>
+                  </div>
+                  <pre className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">{pendingAction.summary}</pre>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={applyAction}
+                      disabled={applying}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-3 bg-primary text-primary-foreground rounded-xl text-sm font-mono font-bold hover:bg-primary/90 transition-colors disabled:opacity-50"
+                    >
+                      {applying ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
+                      {applying ? "Applying…" : "Apply changes"}
+                    </button>
+                    <button
+                      onClick={() => setPendingAction(null)}
+                      disabled={applying}
+                      className="px-4 py-3 border border-border rounded-xl text-sm font-mono text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {applyResult && (
+                <div className={`flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-mono ${applyResult.ok ? "bg-primary/10 text-primary border border-primary/30" : "bg-destructive/10 text-destructive border border-destructive/30"}`}>
+                  {applyResult.ok ? <CheckCircle size={14} /> : <XCircle size={14} />}
+                  {applyResult.message}
+                </div>
+              )}
+
               {chatLoading && (
                 <div className="flex justify-start">
                   <div className="bg-secondary border border-border px-4 py-3 rounded-2xl rounded-bl-sm flex items-center gap-2 text-muted-foreground">
@@ -258,42 +297,6 @@ export default function Insights() {
                   </div>
                 </div>
               )}
-            </div>
-          )}
-
-          {/* Proposed plan change card */}
-          {pendingAction && (
-            <div className="border border-primary/40 bg-primary/5 rounded-xl p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <Sparkles size={13} className="text-primary flex-shrink-0" />
-                <div className="text-[10px] font-mono uppercase tracking-widest text-primary">Proposed change</div>
-              </div>
-              <pre className="text-xs font-mono text-foreground whitespace-pre-wrap leading-relaxed">{pendingAction.summary}</pre>
-              <div className="flex gap-2">
-                <button
-                  onClick={applyAction}
-                  disabled={applying}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-xs font-mono font-bold hover:bg-primary/90 transition-colors disabled:opacity-50"
-                >
-                  {applying ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
-                  {applying ? "Applying…" : "Apply changes"}
-                </button>
-                <button
-                  onClick={() => setPendingAction(null)}
-                  disabled={applying}
-                  className="flex items-center gap-1.5 px-4 py-2 border border-border rounded-lg text-xs font-mono text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors disabled:opacity-50"
-                >
-                  <XCircle size={12} /> Dismiss
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Apply result feedback */}
-          {applyResult && (
-            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-mono ${applyResult.ok ? "bg-primary/10 text-primary" : "bg-destructive/10 text-destructive"}`}>
-              {applyResult.ok ? <CheckCircle size={12} /> : <XCircle size={12} />}
-              {applyResult.message}
             </div>
           )}
 
