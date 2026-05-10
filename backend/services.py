@@ -1,7 +1,9 @@
 """Business logic: program generation, deterministic insights, LLM digest."""
 import os
+import re
+import json
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
 import uuid
 from collections import defaultdict
 
@@ -546,7 +548,14 @@ def generate_ai_split_structure(days_per_week: int, description: str, goal: str,
 
 # ==================== AI Chat ====================
 
-def build_chat_system_prompt(user: Dict, program: Dict, workouts: List[Dict], prs: List[Dict]) -> str:
+def build_chat_system_prompt(
+    user: Dict,
+    program: Dict,
+    recent_workouts: List[Dict],
+    prs: List[Dict],
+    week_completed: List[Dict] = None,
+    week_planned: List[Dict] = None,
+) -> str:
     name = (user.get("name") or "Athlete").split()[0]
     goal = user.get("goal", "hypertrophy")
     experience = user.get("experience", "intermediate")
@@ -573,9 +582,24 @@ def build_chat_system_prompt(user: Dict, program: Dict, workouts: List[Dict], pr
             f"- Week {(program.get('current_week') or 0) + 1} of {program.get('weeks', 4)}",
         ]
 
-    if workouts:
+    if week_completed or week_planned:
+        lines += ["", "THIS WEEK:"]
+        if week_completed:
+            names = ", ".join(w.get("name", "Workout") for w in week_completed)
+            lines.append(f"- Completed: {names}")
+        else:
+            lines.append("- Completed: none yet")
+        if week_planned:
+            for w in week_planned:
+                ex_names = ", ".join(e.get("exercise_name", "") for e in (w.get("exercises") or [])[:5])
+                suffix = "..." if len(w.get("exercises") or []) > 5 else ""
+                lines.append(f"- Scheduled: {w.get('name')} ({(w.get('scheduled_date') or '')[:10]}) — {ex_names}{suffix}")
+        else:
+            lines.append("- No more workouts scheduled this week")
+
+    if recent_workouts:
         lines += ["", "RECENT WORKOUTS (most recent first):"]
-        for w in workouts[:6]:
+        for w in recent_workouts[:6]:
             date = (w.get("completed_at") or "")[:10]
             lines.append(f"- {w.get('name', 'Workout')} ({date})")
 
@@ -586,13 +610,192 @@ def build_chat_system_prompt(user: Dict, program: Dict, workouts: List[Dict], pr
 
     lines += [
         "",
-        "INSTRUCTIONS:",
-        "- Answer in 2-4 short paragraphs max. Be specific and reference their data.",
-        "- If asked about missed workouts: the app has a 'Redistribute missed' button in Settings.",
-        "- If asked about split changes: tell them to use Settings → Switch Split.",
+        "PLAN MODIFICATION — use when user requests it:",
+        "You can propose workout plan changes. Include ONE <action> tag when appropriate:",
+        "",
+        "  Fewer training days this week:",
+        '  <action>{"type":"reschedule_week","days":N}</action>',
+        "",
+        "  Injury / avoid a muscle group:",
+        '  <action>{"type":"remove_exercises","muscle_groups":["hamstrings"]}</action>',
+        "",
+        "  Lagging muscle — add volume:",
+        '  <action>{"type":"add_volume","muscle_groups":["chest"],"extra_sets":2}</action>',
+        "",
+        "RULES:",
+        "- Only propose an action when the user is clearly requesting a plan change.",
+        "- Always explain what you will do BEFORE the <action> tag.",
+        "- The user will see a confirmation card — nothing changes without their approval.",
+        "- Do not invent exercise names. The system handles the exact exercises.",
+        "- Answer in 2-4 short paragraphs. Be specific and reference their data.",
         "- Do not make up numbers not present in the data above.",
     ]
     return "\n".join(lines)
+
+
+# ── Coach action helpers ─────────────────────────────────────────────────────
+
+MUSCLE_ALIASES: Dict[str, List[str]] = {
+    "chest": ["chest"], "pecs": ["chest"],
+    "back": ["upper_back", "lats", "lower_back"], "lats": ["lats"], "upper back": ["upper_back"],
+    "shoulders": ["front_delt", "side_delt", "rear_delt"], "delts": ["front_delt", "side_delt", "rear_delt"],
+    "shoulder": ["front_delt", "side_delt", "rear_delt"],
+    "biceps": ["biceps"], "triceps": ["triceps"],
+    "arms": ["biceps", "triceps"],
+    "legs": ["quads", "hamstrings", "glutes", "calves"],
+    "quads": ["quads"], "quadriceps": ["quads"],
+    "hamstrings": ["hamstrings"], "hamstring": ["hamstrings"],
+    "glutes": ["glutes"], "glute": ["glutes"],
+    "calves": ["calves"], "calf": ["calves"],
+    "core": ["abs", "obliques"], "abs": ["abs"], "abdomen": ["abs"],
+    "lower back": ["lower_back"],
+}
+
+
+def resolve_muscle_groups(names: List[str]) -> List[str]:
+    result: set = set()
+    for n in names:
+        n_lower = n.lower().strip()
+        if n_lower in MUSCLE_ALIASES:
+            result.update(MUSCLE_ALIASES[n_lower])
+        else:
+            result.add(n_lower.replace(" ", "_"))
+    return list(result)
+
+
+def parse_coach_action(text: str) -> Tuple[str, Optional[Dict]]:
+    """Extract <action>JSON</action> from LLM response. Returns (clean_text, action_dict)."""
+    match = re.search(r"<action>(.*?)</action>", text, re.DOTALL)
+    if not match:
+        return text, None
+    clean = (text[: match.start()] + text[match.end() :]).strip()
+    try:
+        return clean, json.loads(match.group(1).strip())
+    except Exception:
+        return text, None
+
+
+def preview_reschedule_week(planned_workouts: List[Dict], days_available: int) -> Dict:
+    """Merge remaining planned workouts into days_available sessions."""
+    if not planned_workouts:
+        return {"summary": "No workouts remaining this week to reschedule.", "new_workouts": [], "original_ids": []}
+
+    n = len(planned_workouts)
+    original_ids = [w["id"] for w in planned_workouts]
+
+    if days_available >= n:
+        return {
+            "summary": f"You already have only {n} workout(s) remaining — no merging needed.",
+            "new_workouts": planned_workouts,
+            "original_ids": original_ids,
+        }
+
+    # Spread n workouts into days_available groups
+    groups: List[List[Dict]] = []
+    per = n / days_available
+    for i in range(days_available):
+        s = round(i * per)
+        e = round((i + 1) * per)
+        groups.append(planned_workouts[s:e])
+
+    new_workouts = []
+    for group in groups:
+        if len(group) == 1:
+            new_workouts.append(dict(group[0]))
+        else:
+            merged_exercises: List[Dict] = []
+            seen: set = set()
+            for w in group:
+                for ex in w.get("exercises") or []:
+                    if ex["exercise_name"] not in seen:
+                        seen.add(ex["exercise_name"])
+                        merged_exercises.append(ex)
+            merged_exercises = merged_exercises[:8]  # cap session length
+            merged = dict(group[0])
+            merged["name"] = " + ".join(w["name"] for w in group)
+            merged["exercises"] = merged_exercises
+            merged["_merged_from"] = [w["id"] for w in group]
+            new_workouts.append(merged)
+
+    # Assign dates from the first workout of each group
+    for nw, group in zip(new_workouts, groups):
+        nw["scheduled_date"] = group[0]["scheduled_date"]
+
+    lines = [f"Merge {n} remaining workouts into {days_available} session(s):"]
+    for nw in new_workouts:
+        date = (nw.get("scheduled_date") or "")[:10]
+        ex_preview = ", ".join(e["exercise_name"] for e in (nw.get("exercises") or [])[:4])
+        if len(nw.get("exercises") or []) > 4:
+            ex_preview += "…"
+        lines.append(f"• {nw['name']} ({date}): {ex_preview}")
+
+    return {"summary": "\n".join(lines), "new_workouts": new_workouts, "original_ids": original_ids}
+
+
+def preview_remove_exercises(planned_workouts: List[Dict], muscle_groups: List[str], exercises_db: List[Dict]) -> Dict:
+    """Find exercises targeting muscle_groups in upcoming workouts."""
+    subgroups = set(resolve_muscle_groups(muscle_groups))
+    exs_by_id = {e["id"]: e for e in exercises_db}
+
+    removals: List[Dict] = []
+    for w in planned_workouts:
+        for ex in w.get("exercises") or []:
+            db_ex = exs_by_id.get(ex.get("exercise_id"), {})
+            ex_sgs = set((db_ex.get("subgroups") or {}).keys())
+            if ex_sgs & subgroups:
+                removals.append({
+                    "workout_id": w["id"],
+                    "workout_name": w["name"],
+                    "exercise_id": ex.get("exercise_id"),
+                    "exercise_name": ex["exercise_name"],
+                })
+
+    if not removals:
+        return {
+            "summary": f"No exercises found targeting {', '.join(muscle_groups)} in your upcoming workouts. Nothing to remove.",
+            "removals": [],
+            "muscle_groups": list(subgroups),
+        }
+
+    lines = [f"Remove {len(removals)} exercise(s) targeting {', '.join(muscle_groups)}:"]
+    for r in removals:
+        lines.append(f"• {r['exercise_name']} (from {r['workout_name']})")
+
+    return {"summary": "\n".join(lines), "removals": removals, "muscle_groups": list(subgroups)}
+
+
+def preview_add_volume(planned_workouts: List[Dict], muscle_groups: List[str], extra_sets: int, exercises_db: List[Dict]) -> Dict:
+    """Preview adding extra_sets to exercises targeting muscle_groups."""
+    subgroups = set(resolve_muscle_groups(muscle_groups))
+    exs_by_id = {e["id"]: e for e in exercises_db}
+
+    additions: List[Dict] = []
+    for w in planned_workouts:
+        for ex in w.get("exercises") or []:
+            db_ex = exs_by_id.get(ex.get("exercise_id"), {})
+            ex_sgs = set((db_ex.get("subgroups") or {}).keys())
+            if ex_sgs & subgroups:
+                additions.append({
+                    "workout_id": w["id"],
+                    "workout_name": w["name"],
+                    "exercise_name": ex["exercise_name"],
+                    "current_sets": ex.get("target_sets", 3),
+                    "new_sets": ex.get("target_sets", 3) + extra_sets,
+                })
+
+    if not additions:
+        return {
+            "summary": f"No exercises found targeting {', '.join(muscle_groups)} in upcoming workouts.",
+            "additions": [],
+            "muscle_groups": list(subgroups),
+            "extra_sets": extra_sets,
+        }
+
+    lines = [f"Add {extra_sets} set(s) to {len(additions)} exercise(s) targeting {', '.join(muscle_groups)}:"]
+    for a in additions:
+        lines.append(f"• {a['exercise_name']} ({a['workout_name']}): {a['current_sets']} → {a['new_sets']} sets")
+
+    return {"summary": "\n".join(lines), "additions": additions, "muscle_groups": list(subgroups), "extra_sets": extra_sets}
 
 
 def call_groq_chat(messages: List[Dict]) -> str:

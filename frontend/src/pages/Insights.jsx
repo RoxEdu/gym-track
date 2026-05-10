@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { Button } from "../components/ui/button";
-import { Sparkles, RefreshCw, ChevronDown, ChevronUp, ShieldCheck, ShieldAlert, Send, Loader2, MessageCircle } from "lucide-react";
+import { Sparkles, RefreshCw, ChevronDown, ChevronUp, ShieldCheck, ShieldAlert, Send, Loader2, MessageCircle, CheckCircle, XCircle } from "lucide-react";
 
 const SUGGESTIONS = [
   "How is my progress looking?",
@@ -24,6 +24,9 @@ export default function Insights() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const [pendingAction, setPendingAction] = useState(null); // proposed plan change
+  const [applying, setApplying] = useState(false);
+  const [applyResult, setApplyResult] = useState(null);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
   const name = (user?.name || "").split(" ")[0] || "there";
@@ -47,6 +50,8 @@ export default function Insights() {
     const content = (text || input).trim();
     if (!content || chatLoading) return;
     setInput("");
+    setPendingAction(null);
+    setApplyResult(null);
 
     const userMsg = { role: "user", content };
     const nextMessages = [...messages, userMsg];
@@ -56,11 +61,26 @@ export default function Insights() {
     try {
       const r = await api.post("/chat", { messages: nextMessages });
       setMessages([...nextMessages, { role: "assistant", content: r.data.message }]);
+      if (r.data.action) setPendingAction(r.data.action);
     } catch {
       setMessages([...nextMessages, { role: "assistant", content: "Something went wrong. Try again." }]);
     } finally {
       setChatLoading(false);
       setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  };
+
+  const applyAction = async () => {
+    if (!pendingAction) return;
+    setApplying(true);
+    try {
+      const r = await api.post("/coach/apply", { type: pendingAction.type, payload: pendingAction });
+      setApplyResult({ ok: true, message: r.data.message });
+      setPendingAction(null);
+    } catch {
+      setApplyResult({ ok: false, message: "Failed to apply changes. Please try again." });
+    } finally {
+      setApplying(false);
     }
   };
 
@@ -227,6 +247,42 @@ export default function Insights() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Proposed plan change card */}
+          {pendingAction && (
+            <div className="border border-primary/40 bg-primary/5 rounded-xl p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Sparkles size={13} className="text-primary flex-shrink-0" />
+                <div className="text-[10px] font-mono uppercase tracking-widest text-primary">Proposed change</div>
+              </div>
+              <pre className="text-xs font-mono text-foreground whitespace-pre-wrap leading-relaxed">{pendingAction.summary}</pre>
+              <div className="flex gap-2">
+                <button
+                  onClick={applyAction}
+                  disabled={applying}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-xs font-mono font-bold hover:bg-primary/90 transition-colors disabled:opacity-50"
+                >
+                  {applying ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+                  {applying ? "Applying…" : "Apply changes"}
+                </button>
+                <button
+                  onClick={() => setPendingAction(null)}
+                  disabled={applying}
+                  className="flex items-center gap-1.5 px-4 py-2 border border-border rounded-lg text-xs font-mono text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors disabled:opacity-50"
+                >
+                  <XCircle size={12} /> Dismiss
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Apply result feedback */}
+          {applyResult && (
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-mono ${applyResult.ok ? "bg-primary/10 text-primary" : "bg-destructive/10 text-destructive"}`}>
+              {applyResult.ok ? <CheckCircle size={12} /> : <XCircle size={12} />}
+              {applyResult.message}
             </div>
           )}
 

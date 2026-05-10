@@ -30,6 +30,11 @@ from services import (
     generate_ai_split_structure,
     build_chat_system_prompt,
     call_groq_chat,
+    parse_coach_action,
+    preview_reschedule_week,
+    preview_remove_exercises,
+    preview_add_volume,
+    resolve_muscle_groups,
 )
 
 ROOT_DIR = Path(__file__).parent
@@ -112,6 +117,10 @@ class ChatMessage(BaseModel):
 
 class ChatPayload(BaseModel):
     messages: List[ChatMessage]
+
+class CoachApplyPayload(BaseModel):
+    type: str
+    payload: Dict[str, Any]
 
 
 # ── Auth ────────────────────────────────────────────────────────────────────
@@ -800,22 +809,141 @@ app.include_router(api)
 @api.post("/chat")
 async def chat(payload: ChatPayload, user: Dict = Depends(get_current_user)):
     uid = user["id"]
-    workouts_r, prs_r = await asyncio.gather(
+    pid = user.get("active_program_id")
+
+    now = datetime.now(timezone.utc)
+    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    week_end = week_start + timedelta(days=7)
+
+    recent_r, prs_r = await asyncio.gather(
         _run(lambda: _t("workouts").select("name,completed_at").eq("user_id", uid).eq("status", "completed").order("completed_at", desc=True).limit(8).execute()),
         _run(lambda: _t("personal_records").select("*").eq("user_id", uid).order("e1rm", desc=True).limit(10).execute()),
     )
-    program = None
-    pid = user.get("active_program_id")
-    if pid:
-        p_r = await _run(lambda: _t("programs").select("split_name,current_week,weeks").eq("id", pid).limit(1).execute())
-        program = p_r.data[0] if p_r.data else None
 
-    system_prompt = build_chat_system_prompt(user, program, workouts_r.data or [], prs_r.data or [])
+    week_completed: List[Dict] = []
+    week_planned: List[Dict] = []
+    program = None
+
+    if pid:
+        p_r, week_r = await asyncio.gather(
+            _run(lambda: _t("programs").select("split_name,current_week,weeks").eq("id", pid).limit(1).execute()),
+            _run(lambda: _t("workouts").select("id,name,status,scheduled_date,exercises").eq("user_id", uid).eq("program_id", pid).gte("scheduled_date", week_start.isoformat()).lte("scheduled_date", week_end.isoformat()).order("scheduled_date").execute()),
+        )
+        program = p_r.data[0] if p_r.data else None
+        for w in week_r.data or []:
+            if w["status"] == "completed":
+                week_completed.append(w)
+            elif w["status"] in ("scheduled", "in_progress"):
+                week_planned.append(w)
+
+    system_prompt = build_chat_system_prompt(
+        user, program, recent_r.data or [], prs_r.data or [],
+        week_completed=week_completed, week_planned=week_planned,
+    )
     messages = [{"role": "system", "content": system_prompt}]
     messages += [{"role": m.role, "content": m.content} for m in payload.messages]
 
-    reply = await _run(lambda: call_groq_chat(messages))
-    return {"message": reply}
+    raw_reply = await _run(lambda: call_groq_chat(messages))
+    clean_reply, action_intent = parse_coach_action(raw_reply)
+
+    action_preview: Optional[Dict] = None
+    if action_intent:
+        atype = action_intent.get("type")
+        try:
+            if atype == "reschedule_week":
+                days = int(action_intent.get("days", 3))
+                action_preview = {"type": atype, **preview_reschedule_week(week_planned, days)}
+            elif atype == "remove_exercises":
+                mg = action_intent.get("muscle_groups", [])
+                exs_r = await _run(lambda: _t("exercises").select("*").limit(500).execute())
+                upcoming = week_planned  # could extend to next week's workouts too
+                action_preview = {"type": atype, **preview_remove_exercises(upcoming, mg, exs_r.data or [])}
+            elif atype == "add_volume":
+                mg = action_intent.get("muscle_groups", [])
+                extra = int(action_intent.get("extra_sets", 2))
+                exs_r = await _run(lambda: _t("exercises").select("*").limit(500).execute())
+                action_preview = {"type": atype, **preview_add_volume(week_planned, mg, extra, exs_r.data or [])}
+        except Exception as e:
+            log.warning(f"Coach action preview failed: {e}")
+
+    return {"message": clean_reply, "action": action_preview}
+
+
+@api.post("/coach/apply")
+async def apply_coach_action(payload: CoachApplyPayload, user: Dict = Depends(get_current_user)):
+    uid = user["id"]
+    atype = payload.type
+    data = payload.payload
+
+    if atype == "reschedule_week":
+        original_ids = data.get("original_ids", [])
+        new_workouts = data.get("new_workouts", [])
+        if not new_workouts:
+            raise HTTPException(400, "No new workouts provided")
+
+        # Delete original planned workouts
+        if original_ids:
+            await _run(lambda: _t("workouts").delete().in_("id", original_ids).eq("user_id", uid).execute())
+
+        # Insert merged workouts (assign new IDs)
+        to_insert = []
+        for w in new_workouts:
+            new_w = {k: v for k, v in w.items() if not k.startswith("_")}
+            new_w["id"] = str(uuid.uuid4())
+            new_w["user_id"] = uid
+            new_w["status"] = "scheduled"
+            to_insert.append(new_w)
+        await _run(lambda: _t("workouts").insert(to_insert).execute())
+        return {"ok": True, "message": f"Rescheduled {len(to_insert)} session(s) for this week."}
+
+    elif atype == "remove_exercises":
+        removals = data.get("removals", [])
+        if not removals:
+            return {"ok": True, "message": "Nothing to remove."}
+
+        # Group by workout_id
+        by_workout: Dict[str, List[str]] = {}
+        for r in removals:
+            by_workout.setdefault(r["workout_id"], []).append(r["exercise_id"])
+
+        for wid, ex_ids_to_remove in by_workout.items():
+            w_r = await _run(lambda wid=wid: _t("workouts").select("exercises").eq("id", wid).eq("user_id", uid).limit(1).execute())
+            if not w_r.data:
+                continue
+            current_exercises = w_r.data[0].get("exercises") or []
+            filtered = [e for e in current_exercises if e.get("exercise_id") not in ex_ids_to_remove]
+            await _run(lambda wid=wid, fe=filtered: _t("workouts").update({"exercises": fe}).eq("id", wid).eq("user_id", uid).execute())
+
+        return {"ok": True, "message": f"Removed {len(removals)} exercise(s) from upcoming workouts."}
+
+    elif atype == "add_volume":
+        additions = data.get("additions", [])
+        extra_sets = int(data.get("extra_sets", 2))
+        if not additions:
+            return {"ok": True, "message": "Nothing to update."}
+
+        # Group by workout_id
+        by_workout: Dict[str, int] = {a["workout_id"]: extra_sets for a in additions}
+        ex_names_by_wid: Dict[str, set] = {}
+        for a in additions:
+            ex_names_by_wid.setdefault(a["workout_id"], set()).add(a["exercise_name"])
+
+        for wid, names in ex_names_by_wid.items():
+            w_r = await _run(lambda wid=wid: _t("workouts").select("exercises").eq("id", wid).eq("user_id", uid).limit(1).execute())
+            if not w_r.data:
+                continue
+            exercises = w_r.data[0].get("exercises") or []
+            updated = []
+            for ex in exercises:
+                if ex.get("exercise_name") in names:
+                    ex = dict(ex)
+                    ex["target_sets"] = ex.get("target_sets", 3) + extra_sets
+                updated.append(ex)
+            await _run(lambda wid=wid, ue=updated: _t("workouts").update({"exercises": ue}).eq("id", wid).eq("user_id", uid).execute())
+
+        return {"ok": True, "message": f"Added {extra_sets} set(s) to targeted exercises in upcoming workouts."}
+
+    raise HTTPException(400, f"Unknown action type: {atype}")
 
 
 # ── Startup seed ─────────────────────────────────────────────────────────────
