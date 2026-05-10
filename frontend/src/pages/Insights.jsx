@@ -13,6 +13,58 @@ const SUGGESTIONS = [
   "When should I move to the next mesocycle?",
 ];
 
+const _MUSCLE_MAP = {
+  hamstring: "hamstrings", hamstrings: "hamstrings",
+  quad: "quads", quads: "quads", quadricep: "quads",
+  chest: "chest", pec: "chest",
+  "lower back": "lower_back", back: "upper_back",
+  lats: "lats", lat: "lats",
+  shoulder: "side_delt", delt: "side_delt",
+  calf: "calves", calves: "calves",
+  bicep: "biceps", biceps: "biceps",
+  tricep: "triceps", triceps: "triceps",
+  glute: "glutes", glutes: "glutes", hip: "glutes",
+  knee: "quads", wrist: "biceps", elbow: "triceps",
+};
+
+function detectIntent(text) {
+  const t = text.toLowerCase();
+
+  // Reschedule: user mentions fewer training days
+  const dayPatterns = [
+    /(?:only|just|can only|have only|only have|limited to)\s+(\d)\s*days?/,
+    /(\d)\s*days?\s+(?:this|a|per)\s+week/,
+    /(?:train|workout|work\s*out|exercise|gym)\s+(?:only\s+)?(\d)\s*days?/,
+    /(\d)\s*days?\s+(?:available|left|only|remaining)/,
+    /reduce.*?(\d)\s*days?/,
+  ];
+  for (const pat of dayPatterns) {
+    const m = t.match(pat);
+    if (m) {
+      const days = parseInt(m[1], 10);
+      if (days >= 1 && days <= 6) return { type: "reschedule_week", days };
+    }
+  }
+
+  // Injury: avoid muscle exercises
+  const injuryWords = ["injur", "hurt", "pain", "sore", "strain", "sprain", "torn", "avoid", "skip", "rest my", "can't use", "cannot use", "bad knee", "bad shoulder", "bad back"];
+  if (injuryWords.some(w => t.includes(w))) {
+    for (const [key, val] of Object.entries(_MUSCLE_MAP)) {
+      if (t.includes(key)) return { type: "remove_exercises", muscle_groups: [val] };
+    }
+  }
+
+  // Volume: lagging muscle
+  const volumeWords = ["not growing", "not getting bigger", "lagging", "weak point", "need more", "focus more on", "improve my", "bring up", "prioritize"];
+  if (volumeWords.some(w => t.includes(w))) {
+    for (const [key, val] of Object.entries(_MUSCLE_MAP)) {
+      if (t.includes(key)) return { type: "add_volume", muscle_groups: [val], extra_sets: 2 };
+    }
+  }
+
+  return null;
+}
+
 export default function Insights() {
   const { user } = useAuth();
   const [data, setData] = useState({ insights: [], weekly_volume: {}, previous_weekly_volume: {}, landmarks: {}, recovery: {}, digest: null, streak_days: 0, weak_subgroups: [], top_movers: [] });
@@ -59,15 +111,27 @@ export default function Insights() {
     setChatLoading(true);
 
     try {
-      const r = await api.post("/chat", { messages: nextMessages });
-      const debugSuffix = r.data.action
-        ? `\n\n[DEBUG action=${r.data.action.type} summary="${(r.data.action.summary||"").slice(0,80)}"]`
-        : "\n\n[DEBUG no action detected]";
-      setMessages([...nextMessages, { role: "assistant", content: r.data.message + debugSuffix }]);
-      if (r.data.action) setPendingAction(r.data.action);
+      const intent = detectIntent(content);
+
+      const [chatResult, previewResult] = await Promise.allSettled([
+        api.post("/chat", { messages: nextMessages }),
+        intent ? api.post("/coach/preview", intent) : Promise.resolve(null),
+      ]);
+
+      if (chatResult.status === "rejected") throw chatResult.reason;
+
+      const chatData = chatResult.value.data;
+      setMessages([...nextMessages, { role: "assistant", content: chatData.message }]);
+
+      // Client-side intent wins; fall back to chat's returned action
+      if (previewResult.status === "fulfilled" && previewResult.value?.data) {
+        setPendingAction(previewResult.value.data);
+      } else if (chatData.action) {
+        setPendingAction(chatData.action);
+      }
     } catch (err) {
       const detail = err?.response?.data?.detail || err?.response?.status || err?.message || "unknown";
-      setMessages([...nextMessages, { role: "assistant", content: `Error: ${detail}` }]);
+      setMessages([...nextMessages, { role: "assistant", content: `Sorry, something went wrong. (${detail})` }]);
     } finally {
       setChatLoading(false);
       setTimeout(() => inputRef.current?.focus(), 50);

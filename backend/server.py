@@ -888,6 +888,54 @@ async def chat(payload: ChatPayload, user: Dict = Depends(get_current_user)):
     return {"message": clean_reply, "action": action_preview}
 
 
+class CoachPreviewPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    type: str
+    days: Optional[int] = None
+    muscle_groups: Optional[List[str]] = None
+    extra_sets: Optional[int] = 2
+
+
+@api.post("/coach/preview")
+async def coach_preview(payload: CoachPreviewPayload, user: Dict = Depends(get_current_user)):
+    uid = user["id"]
+    pid = user.get("active_program_id")
+    atype = payload.type
+
+    week_planned: List[Dict] = []
+    if pid:
+        try:
+            now = datetime.now(timezone.utc)
+            week_start_str = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
+            week_end_str = (now + timedelta(days=7 - now.weekday())).strftime("%Y-%m-%d")
+            week_r = await _run(lambda: _t("workouts").select("id,name,status,scheduled_date,exercises").eq("user_id", uid).eq("program_id", pid).gte("scheduled_date", week_start_str).lte("scheduled_date", week_end_str).order("scheduled_date").execute())
+            week_planned = [w for w in (week_r.data or []) if w["status"] in ("scheduled", "in_progress")]
+        except Exception as e:
+            log.warning(f"Preview week fetch failed: {e}")
+
+    try:
+        if atype == "reschedule_week":
+            days = int(payload.days or 3)
+            result = preview_reschedule_week(week_planned, days)
+            return {"type": atype, **result}
+        elif atype == "remove_exercises":
+            mg = payload.muscle_groups or []
+            exs_r = await _run(lambda: _t("exercises").select("*").limit(500).execute())
+            result = preview_remove_exercises(week_planned, mg, exs_r.data or [])
+            return {"type": atype, **result}
+        elif atype == "add_volume":
+            mg = payload.muscle_groups or []
+            extra = int(payload.extra_sets or 2)
+            exs_r = await _run(lambda: _t("exercises").select("*").limit(500).execute())
+            result = preview_add_volume(week_planned, mg, extra, exs_r.data or [])
+            return {"type": atype, **result}
+    except Exception as e:
+        log.warning(f"Coach preview failed: {e}")
+        raise HTTPException(500, f"Preview failed: {e}")
+
+    raise HTTPException(400, f"Unknown intent type: {atype}")
+
+
 @api.post("/coach/apply")
 async def apply_coach_action(payload: CoachApplyPayload, user: Dict = Depends(get_current_user)):
     uid = user["id"]
