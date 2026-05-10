@@ -42,7 +42,6 @@ export default function Progress() {
   };
 
   const handleDelete = async (photo) => {
-    if (!window.confirm("Delete this photo?")) return;
     try {
       await api.delete(`/progress-photos/${photo.id}`);
       setPhotos(prev => prev.filter(p => p.id !== photo.id));
@@ -128,14 +127,22 @@ export default function Progress() {
             {photos.map((p) => (
               <div
                 key={p.id}
-                className="relative aspect-square group cursor-pointer rounded-xl overflow-hidden bg-secondary"
-                onClick={() => setLightbox(p)}
+                className="relative aspect-square rounded-xl overflow-hidden bg-secondary"
               >
-                <img src={p.url} alt="Progress" className="w-full h-full object-cover" />
-                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                  <ZoomIn size={20} className="text-white" />
-                </div>
-                <div className="absolute bottom-1 left-1 text-[9px] font-mono text-white bg-black/40 px-1.5 py-0.5 rounded">
+                <img
+                  src={p.url}
+                  alt="Progress"
+                  className="w-full h-full object-cover cursor-pointer"
+                  onClick={() => setLightbox(p)}
+                />
+                {/* Always-visible delete button */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleDelete(p); }}
+                  className="absolute top-1.5 right-1.5 w-6 h-6 bg-black/60 rounded-full flex items-center justify-center hover:bg-red-500 transition-colors"
+                >
+                  <X size={12} className="text-white" />
+                </button>
+                <div className="absolute bottom-1 left-1 text-[9px] font-mono text-white bg-black/40 px-1.5 py-0.5 rounded pointer-events-none">
                   {new Date(p.created_at).toLocaleDateString()}
                 </div>
               </div>
