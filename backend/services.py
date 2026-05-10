@@ -616,18 +616,28 @@ def build_chat_system_prompt(
 
     lines += [
         "",
-        "PLAN MODIFICATION — use when user requests it:",
-        "When proposing a plan change, end your message with EXACTLY one of these tags (use angle brackets < >, not square brackets):",
+        "── PLAN CHANGES ──",
+        "When the user's message involves scheduling, injury, or muscle focus, you MUST output an <action> tag in your FIRST reply.",
+        "Do NOT ask 'would you like me to?' or 'shall I adjust?' — just do it. The app shows a confirmation button; your job is only to propose.",
         "",
-        '  <action>{"type":"reschedule_week","days":N}</action>  ← fewer days this week',
-        '  <action>{"type":"remove_exercises","muscle_groups":["hamstrings"]}</action>  ← injury',
-        '  <action>{"type":"add_volume","muscle_groups":["chest"],"extra_sets":2}</action>  ← lagging muscle',
+        "TRIGGERS and the exact tag to use:",
+        '  User mentions fewer days available → <action>{"type":"reschedule_week","days":N}</action>',
+        '  User mentions injury or pain in a muscle → <action>{"type":"remove_exercises","muscle_groups":["muscle_name"]}</action>',
+        '  User says a muscle is lagging/not growing → <action>{"type":"add_volume","muscle_groups":["muscle_name"],"extra_sets":2}</action>',
+        "",
+        "EXAMPLE (user: 'I can only train 3 days this week'):",
+        "  WRONG: 'I recommend adjusting your split. Would you like me to reschedule?'",
+        "  RIGHT:  'Got it — I'll compress this week into 3 sessions focusing on the main compound lifts. <action>{\"type\":\"reschedule_week\",\"days\":3}</action>'",
+        "",
+        "EXAMPLE (user: 'my hamstring is injured'):",
+        "  WRONG: 'You should rest your hamstring. Shall I remove those exercises?'",
+        "  RIGHT:  'I'll remove hamstring exercises from your upcoming sessions so you can recover. <action>{\"type\":\"remove_exercises\",\"muscle_groups\":[\"hamstrings\"]}</action>'",
         "",
         "RULES:",
-        "- Only include an <action> tag when the user clearly wants a plan change.",
-        "- Keep your message brief (2-3 sentences). The app shows a confirmation card — user approves before anything changes.",
-        "- NEVER use [ ] brackets for the action tag. Always use < > angle brackets.",
-        "- Do not invent exercise names. Do not make up numbers not in the data above.",
+        "- Always use angle brackets < > for the tag — NEVER square brackets [ ].",
+        "- Put the <action> tag at the very END of your message.",
+        "- Keep the message to 1-2 sentences before the tag.",
+        "- Do not invent exercise names. Do not make up numbers not present in the data above.",
     ]
     return "\n".join(lines)
 
@@ -839,8 +849,8 @@ def call_groq_chat(messages: List[Dict]) -> str:
         response = client.chat.completions.create(
             model=model,
             messages=messages,
-            temperature=0.6,
-            max_tokens=600,
+            temperature=0.4,
+            max_tokens=800,
         )
         return response.choices[0].message.content.strip()
     except Exception as e:

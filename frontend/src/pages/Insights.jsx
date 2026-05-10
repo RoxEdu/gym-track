@@ -202,9 +202,19 @@ export default function Insights() {
 
       {/* Coach chat */}
       <div>
-        <div className="flex items-center gap-2 mb-3">
-          <MessageCircle size={13} className="text-primary" />
-          <div className="text-[10px] font-mono uppercase tracking-widest text-primary">Ask your coach</div>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <MessageCircle size={13} className="text-primary" />
+            <div className="text-[10px] font-mono uppercase tracking-widest text-primary">Ask your coach</div>
+          </div>
+          {messages.length > 0 && (
+            <button
+              onClick={() => { setMessages([]); setPendingAction(null); setApplyResult(null); }}
+              className="text-[10px] font-mono text-muted-foreground hover:text-foreground transition-colors"
+            >
+              clear chat
+            </button>
+          )}
         </div>
 
         <div className="bg-card border border-border rounded-xl p-4 space-y-3">
