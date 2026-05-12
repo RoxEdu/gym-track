@@ -30,13 +30,15 @@ const _MUSCLE_MAP = {
 function detectIntent(text) {
   const t = text.toLowerCase();
 
-  // Reschedule: user mentions fewer training days
+  // Reschedule: user mentions fewer training days/times/sessions/workouts
+  const U = "(?:days?|times?|sessions?|workouts?)";
   const dayPatterns = [
-    /(?:only|just|can only|have only|only have|limited to)\s+(\d)\s*days?/,
-    /(\d)\s*days?\s+(?:this|a|per)\s+week/,
-    /(?:train|workout|work\s*out|exercise|gym)\s+(?:only\s+)?(\d)\s*days?/,
-    /(\d)\s*days?\s+(?:available|left|only|remaining)/,
-    /reduce.*?(\d)\s*days?/,
+    new RegExp(`(?:only|just|can only|have only|only have|limited to)(?:\\s+(?:workout|train|exercise|work\\s*out|go to (?:the\\s+)?gym))?\\s+(?:for\\s+)?(\\d)\\s*${U}`),
+    new RegExp(`(\\d)\\s*${U}\\s+(?:this|a|per|each)\\s+week`),
+    new RegExp(`(?:train|workout|work\\s*out|exercise|gym|go to (?:the\\s+)?gym)\\s+(?:only\\s+|for\\s+)?(\\d)\\s*${U}`),
+    new RegExp(`(\\d)\\s*${U}\\s+(?:available|left|only|remaining)`),
+    new RegExp(`reduce.*?(\\d)\\s*${U}`),
+    new RegExp(`(?:cut\\s+(?:down\\s+)?to|drop\\s+to|down\\s+to)\\s+(\\d)\\s*${U}`),
   ];
   for (const pat of dayPatterns) {
     const m = t.match(pat);

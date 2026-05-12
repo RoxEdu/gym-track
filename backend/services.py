@@ -691,12 +691,16 @@ def detect_plan_intent(user_message: str) -> Optional[Dict]:
     text = user_message.lower().strip()
 
     # ── Reschedule week ──────────────────────────────────────────────────────
+    # Match "days", "times", "sessions", "workouts" interchangeably — users say
+    # "3 times this week" or "workout 3 times" just as often as "3 days".
+    unit = r"(?:days?|times?|sessions?|workouts?)"
     day_patterns = [
-        r'(?:only|just|can only|have only|only have|limited to)\s+(\d)\s*days?',
-        r'(\d)\s*days?\s+(?:this|a|per)\s+week',
-        r'(?:train|workout|work\s*out|exercise|go to gym)\s+(?:only\s+)?(\d)\s*days?',
-        r'(\d)\s*days?\s+(?:available|left|only|remaining)',
-        r'reduce.*?(\d)\s*days?',
+        rf"(?:only|just|can only|have only|only have|limited to)(?:\s+(?:workout|train|exercise|work\s*out|go to (?:the\s+)?gym))?\s+(?:for\s+)?(\d)\s*{unit}",
+        rf"(\d)\s*{unit}\s+(?:this|a|per|each)\s+week",
+        rf"(?:train|workout|work\s*out|exercise|gym|go to (?:the\s+)?gym)\s+(?:only\s+|for\s+)?(\d)\s*{unit}",
+        rf"(\d)\s*{unit}\s+(?:available|left|only|remaining)",
+        rf"reduce.*?(\d)\s*{unit}",
+        rf"(?:cut\s+(?:down\s+)?to|drop\s+to|down\s+to)\s+(\d)\s*{unit}",
     ]
     for pat in day_patterns:
         m = re.search(pat, text)
