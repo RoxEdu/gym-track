@@ -570,11 +570,22 @@ def build_chat_system_prompt(
     units = user.get("units", "kg")
 
     lines = [
-        f"You are {name}'s personal strength coach. You've been working with them for months and know their program inside out.",
-        f"Talk to {name} directly and personally — reference their actual data, not generic advice.",
-        "You are warm, direct, and confident. You never hedge or ask for permission.",
-        "Keep responses to 2-3 sentences max. Be specific. Sound human.",
-        "Never start with 'Great!' or 'Absolutely!' or 'Of course!'. Just answer.",
+        # ── PERSONALITY ──────────────────────────────────────────────────────
+        f"You are Coach — {name}'s personal strength coach. Think Coach Bennett (Nike Run Club): warm,",
+        "human, deeply encouraging, but never cheesy. You believe in the long game. You believe",
+        f"in {name}. You've been working together for months and know the program by heart.",
+        "",
+        "VOICE — how you sound:",
+        f"- Address {name} by first name. Talk in second person. Use 'we' often — you're in this together.",
+        "- Speak like a friend who happens to be a coach. Casual contractions, short sentences.",
+        "- Acknowledge the human first ('Totally fair', 'I hear you', 'That's a real thing'), then redirect to action.",
+        "- Honest, never judgmental. Missed workouts aren't failure — they're data.",
+        "- Confident and direct. You never hedge ('maybe', 'I think you should consider') and never ask permission.",
+        "- Lean on phrases like: 'Here's the thing.', 'Trust the process.', 'Show up.', 'Honest reps.',",
+        "  'Stack the wins.', 'The work compounds.', 'Listen,'. Use them sparingly — once or twice a reply, max.",
+        "- NEVER start with 'Great!', 'Absolutely!', 'Of course!', or any exclamation. Just talk.",
+        "- NO em-dashes used as separators. NO markdown headers, no bullet lists. Flowing prose only.",
+        "- Keep it tight: 2–4 sentences. Every word earns its place.",
         "",
         f"ATHLETE PROFILE — {name.upper()}:",
         f"- Goal: {goal}",
@@ -596,16 +607,18 @@ def build_chat_system_prompt(
         lines += ["", "THIS WEEK:"]
         if week_completed:
             names = ", ".join(w.get("name", "Workout") for w in week_completed)
-            lines.append(f"- Completed: {names}")
+            lines.append(f"- Completed ({len(week_completed)}): {names}")
         else:
             lines.append("- Completed: none yet")
         if week_planned:
+            lines.append(f"- Remaining ({len(week_planned)}):")
             for w in week_planned:
-                ex_names = ", ".join(e.get("exercise_name", "") for e in (w.get("exercises") or [])[:5])
-                suffix = "..." if len(w.get("exercises") or []) > 5 else ""
-                lines.append(f"- Scheduled: {w.get('name')} ({(w.get('scheduled_date') or '')[:10]}) — {ex_names}{suffix}")
+                exs = w.get("exercises") or []
+                ex_names = ", ".join(e.get("exercise_name", "") for e in exs[:5])
+                suffix = "…" if len(exs) > 5 else ""
+                lines.append(f"    · {w.get('name')} ({(w.get('scheduled_date') or '')[:10]}) — {ex_names}{suffix}")
         else:
-            lines.append("- No more workouts scheduled this week")
+            lines.append("- Nothing left on the schedule this week")
 
     if recent_workouts:
         lines += ["", "RECENT WORKOUTS (most recent first):"]
@@ -621,20 +634,36 @@ def build_chat_system_prompt(
     lines += [
         "",
         "── PLAN MODIFICATIONS ──",
-        "The app detects scheduling/injury/volume requests automatically and shows a confirmation card.",
-        "When the user mentions: fewer days, an injury, or a lagging muscle — acknowledge it directly and tell them what you're doing.",
-        "Do NOT ask 'would you like me to?' or 'shall I?' — the app handles confirmation. Just respond like a coach who's already on it.",
+        "When the athlete asks for a schedule change, mentions an injury, says they can't do a specific",
+        "exercise, or flags a lagging muscle — the app automatically shows a confirmation card with the",
+        "exact proposed change. Your job: acknowledge what they said, tell them what you've teed up,",
+        "and point them at the card. The card is the confirmation — never ask 'shall I?' or 'do you want me to?'.",
         "",
-        "EXAMPLE (user: 'I can only train 3 days this week'):",
-        "  WRONG: 'I can help with that! Would you like me to adjust your schedule?'",
-        "  RIGHT:  'No problem — I've queued up a 3-day version for you, keeping the big compound lifts. Review the plan below.'",
+        f"EXAMPLE — {name}: 'I can only train 3 days this week'",
+        f"  WRONG:  'I can help with that! Would you like me to adjust your schedule?'",
+        f"  RIGHT:  'Three days — totally workable. I've merged what's left into a tighter week that keeps",
+        f"          the big lifts intact. Check the card below, hit apply when you're good.'",
         "",
-        "EXAMPLE (user: 'my hamstring is injured'):",
-        "  WRONG: 'You should rest it. Want me to remove those exercises?'",
-        "  RIGHT:  'Rest it properly. I've pulled the hamstring work from your upcoming sessions — check the proposal below.'",
+        f"EXAMPLE — {name}: 'my calf is injured'",
+        f"  WRONG:  'You should rest it. Want me to remove those exercises?'",
+        f"  RIGHT:  'Calves off the menu — we rest, we don't push through it. I've pulled the calf work",
+        f"          from this week so you can heal up. Proposal's below.'",
         "",
-        "- Keep responses to 1-2 sentences. Be direct.",
-        "- Do not invent exercise names or numbers not in the data above.",
+        f"EXAMPLE — {name}: 'I can't do pull-ups today'",
+        f"  WRONG:  'Try lat pulldowns instead. Should I swap them?'",
+        f"  RIGHT:  'No drama — pull-ups out, lat pulldown in. Same job, less grip fatigue. Confirm below",
+        f"          and we keep moving.'",
+        "",
+        f"EXAMPLE — {name}: 'My chest is lagging, need to focus on it'",
+        f"  WRONG:  'I can add more chest volume if you want.'",
+        f"  RIGHT:  'Heard. We bump chest volume up two sets per exercise this week and reassess Sunday.",
+        f"          Card below, then we get to work.'",
+        "",
+        "Hard rules:",
+        "- Never invent exercise names, weights, or numbers that aren't in the data above.",
+        "- Never promise to do something the app can't do (it can: reschedule the week, remove exercises by",
+        "  muscle group, swap a specific exercise for a similar one, add volume to a muscle group).",
+        "- If the request is outside that scope, say so honestly and offer the closest thing.",
     ]
     return "\n".join(lines)
 
@@ -657,7 +686,7 @@ _MUSCLE_MAP = {
 
 
 def detect_plan_intent(user_message: str) -> Optional[Dict]:
-    """Detect scheduling/injury/volume intent from the user's message via keyword matching.
+    """Detect scheduling/injury/volume/replace intent from the user's message via keyword matching.
     Used as a fallback when the LLM doesn't emit a proper <action> tag."""
     text = user_message.lower().strip()
 
@@ -676,11 +705,35 @@ def detect_plan_intent(user_message: str) -> Optional[Dict]:
             if 1 <= days <= 6:
                 return {"type": "reschedule_week", "days": days}
 
-    # ── Injury / avoid muscle ────────────────────────────────────────────────
+    # ── Replace a specific exercise ──────────────────────────────────────────
+    # Captures phrasings like: "can't do pull-ups", "replace bench press", "swap squats",
+    # "switch out deadlifts", "I hate dumbbell curls", "no rows today"
+    replace_patterns = [
+        r"(?:can[' ]?t|cannot|don[' ]?t want to|won[' ]?t)\s+do\s+([a-z0-9\-\s]+?)(?:\s+today|\s+this\s+week|[.,!?]|$)",
+        r"(?:replace|swap|switch(?:\s+out)?|sub(?:stitute)?|change)\s+(?:the\s+|my\s+)?([a-z0-9\-\s]+?)(?:\s+(?:for|with)\b|[.,!?]|$)",
+        r"(?:skip|no|drop)\s+(?:the\s+|my\s+)?([a-z0-9\-\s]+?)(?:\s+today|\s+this\s+week|[.,!?]|$)",
+        r"(?:i\s+hate|i\s+can[' ]?t\s+stand)\s+([a-z0-9\-\s]+?)(?:[.,!?]|$)",
+    ]
+    # If the message also mentions an injury + a muscle group, the muscle-based handler below is preferred.
+    # Otherwise, treat as an exercise swap.
     injury_words = ["injur", "hurt", "pain", "sore", "strain", "sprain", "torn",
-                    "avoid", "skip", "rest my", "can't use", "cannot use", "bad knee",
+                    "avoid", "rest my", "can't use", "cannot use", "bad knee",
                     "bad shoulder", "bad back"]
-    if any(w in text for w in injury_words):
+    looks_like_injury = any(w in text for w in injury_words)
+
+    if not looks_like_injury:
+        for pat in replace_patterns:
+            m = re.search(pat, text)
+            if m:
+                query = m.group(1).strip()
+                # Strip filler words
+                query = re.sub(r"^(?:any|some|the|a|my)\s+", "", query).strip()
+                # Reject very short / generic captures
+                if len(query) >= 3 and query not in {"it", "that", "this", "them", "stuff", "things"}:
+                    return {"type": "replace_exercise", "exercise_query": query}
+
+    # ── Injury / avoid muscle ────────────────────────────────────────────────
+    if looks_like_injury or "skip" in text or "avoid" in text:
         for key, val in _MUSCLE_MAP.items():
             if key in text:
                 return {"type": "remove_exercises", "muscle_groups": [val]}
@@ -731,7 +784,7 @@ def parse_coach_action(text: str) -> Tuple[str, Optional[Dict]]:
     if not match:
         # Fallback: find a raw JSON object containing our known action types
         match = re.search(
-            r'\{"type"\s*:\s*"(?:reschedule_week|remove_exercises|add_volume)"[^}]*\}',
+            r'\{"type"\s*:\s*"(?:reschedule_week|remove_exercises|add_volume|replace_exercise)"[^}]*\}',
             text, re.DOTALL
         )
         if not match:
@@ -834,6 +887,123 @@ def preview_remove_exercises(planned_workouts: List[Dict], muscle_groups: List[s
         lines.append(f"• {r['exercise_name']} (from {r['workout_name']})")
 
     return {"summary": "\n".join(lines), "removals": removals, "muscle_groups": list(subgroups)}
+
+
+def _normalize_ex_name(name: str) -> str:
+    """Lowercase, strip punctuation, collapse spaces — for fuzzy exercise-name matching."""
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", name.lower())).strip()
+
+
+_STOPWORDS = {"the", "a", "an", "and", "or", "with", "of", "to", "in", "on",
+              "press", "curl", "row", "raise", "fly"}  # too-generic exercise words
+
+
+def _ex_match_score(query: str, ex_name: str) -> int:
+    """Return a heuristic match score between a user query and an exercise name."""
+    q = _normalize_ex_name(query)
+    n = _normalize_ex_name(ex_name)
+    if not q or not n:
+        return 0
+    # Exact phrase containment is strongest signal
+    if q in n or n in q:
+        return 100 + len(q)
+    # Word-level overlap
+    q_words = [w for w in q.split() if w not in _STOPWORDS]
+    n_words = set(n.split())
+    matched = sum(1 for w in q_words if w in n_words or any(w in nw or nw in w for nw in n_words))
+    return matched * 10 - (len(n_words) - matched)
+
+
+def preview_replace_exercise(planned_workouts: List[Dict], exercise_query: str, exercises_db: List[Dict]) -> Dict:
+    """Find an exercise in upcoming workouts matching exercise_query and propose a swap.
+    Picks a replacement with the same category + movement (excluding the original)."""
+    exs_by_id = {e["id"]: e for e in exercises_db}
+
+    # 1. Find the best-matching exercise instance across upcoming workouts.
+    best_match = None
+    best_score = 0
+    for w in planned_workouts:
+        for ex in w.get("exercises") or []:
+            score = _ex_match_score(exercise_query, ex.get("exercise_name", ""))
+            if score > best_score:
+                best_score = score
+                best_match = {"workout": w, "exercise": ex}
+
+    if not best_match or best_score < 5:
+        return {
+            "summary": f"I couldn't find anything matching “{exercise_query}” in your upcoming workouts this week. "
+                       f"Try the exact name (e.g. ‘pull-up’, ‘bench press’).",
+            "swaps": [],
+            "exercise_query": exercise_query,
+        }
+
+    original_ex = best_match["exercise"]
+    original_db = exs_by_id.get(original_ex.get("exercise_id"), {})
+    category = original_db.get("category")
+    movement = original_db.get("movement")
+    original_subgroups = set((original_db.get("subgroups") or {}).keys())
+
+    # 2. Find a replacement: same category + movement, different exercise, prefers shared subgroups.
+    candidates = [
+        e for e in exercises_db
+        if e["id"] != original_db.get("id")
+        and e.get("category") == category
+        and e.get("movement") == movement
+    ]
+    if not candidates and category:
+        # Loosen: any exercise in same category targeting overlapping subgroups
+        candidates = [
+            e for e in exercises_db
+            if e["id"] != original_db.get("id")
+            and e.get("category") == category
+            and set((e.get("subgroups") or {}).keys()) & original_subgroups
+        ]
+
+    if not candidates:
+        return {
+            "summary": f"Found {original_ex.get('exercise_name')} but couldn't find a clean alternative in your library. "
+                       f"Try removing it instead.",
+            "swaps": [],
+            "exercise_query": exercise_query,
+        }
+
+    # Rank by overlap of subgroups with the original
+    def _overlap(cand):
+        cand_sgs = set((cand.get("subgroups") or {}).keys())
+        return len(cand_sgs & original_subgroups)
+
+    candidates.sort(key=lambda c: (-_overlap(c), c["name"]))
+    replacement = candidates[0]
+
+    # 3. Collect every instance of the original exercise across upcoming workouts (swap them all).
+    swaps: List[Dict] = []
+    for w in planned_workouts:
+        for ex in w.get("exercises") or []:
+            if ex.get("exercise_id") == original_ex.get("exercise_id"):
+                swaps.append({
+                    "workout_id": w["id"],
+                    "workout_name": w["name"],
+                    "workout_exercise_id": ex.get("id"),
+                    "from_exercise_id": ex.get("exercise_id"),
+                    "from_exercise_name": ex.get("exercise_name"),
+                    "to_exercise_id": replacement["id"],
+                    "to_exercise_name": replacement["name"],
+                })
+
+    lines = [
+        f"Swap {original_ex.get('exercise_name')} → {replacement['name']} "
+        f"across {len(swaps)} upcoming session(s):"
+    ]
+    for s in swaps:
+        lines.append(f"• {s['workout_name']}: {s['from_exercise_name']} → {s['to_exercise_name']}")
+
+    return {
+        "summary": "\n".join(lines),
+        "swaps": swaps,
+        "exercise_query": exercise_query,
+        "from_exercise_name": original_ex.get("exercise_name"),
+        "to_exercise_name": replacement["name"],
+    }
 
 
 def preview_add_volume(planned_workouts: List[Dict], muscle_groups: List[str], extra_sets: int, exercises_db: List[Dict]) -> Dict:

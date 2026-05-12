@@ -35,6 +35,7 @@ from services import (
     preview_reschedule_week,
     preview_remove_exercises,
     preview_add_volume,
+    preview_replace_exercise,
     resolve_muscle_groups,
 )
 
@@ -882,6 +883,10 @@ async def chat(payload: ChatPayload, user: Dict = Depends(get_current_user)):
                 extra = int(action_intent.get("extra_sets", 2))
                 exs_r = await _run(lambda: _t("exercises").select("*").limit(500).execute())
                 action_preview = {"type": atype, **preview_add_volume(week_planned, mg, extra, exs_r.data or [])}
+            elif atype == "replace_exercise":
+                query = action_intent.get("exercise_query") or action_intent.get("exercise_name") or ""
+                exs_r = await _run(lambda: _t("exercises").select("*").limit(500).execute())
+                action_preview = {"type": atype, **preview_replace_exercise(week_planned, query, exs_r.data or [])}
         except Exception as e:
             log.warning(f"Coach action preview failed: {e}")
 
@@ -894,6 +899,7 @@ class CoachPreviewPayload(BaseModel):
     days: Optional[int] = None
     muscle_groups: Optional[List[str]] = None
     extra_sets: Optional[int] = 2
+    exercise_query: Optional[str] = None
 
 
 @api.post("/coach/preview")
@@ -929,6 +935,15 @@ async def coach_preview(payload: CoachPreviewPayload, user: Dict = Depends(get_c
             exs_r = await _run(lambda: _t("exercises").select("*").limit(500).execute())
             result = preview_add_volume(week_planned, mg, extra, exs_r.data or [])
             return {"type": atype, **result}
+        elif atype == "replace_exercise":
+            query = (payload.exercise_query or "").strip()
+            if not query:
+                raise HTTPException(400, "exercise_query is required for replace_exercise")
+            exs_r = await _run(lambda: _t("exercises").select("*").limit(500).execute())
+            result = preview_replace_exercise(week_planned, query, exs_r.data or [])
+            return {"type": atype, **result}
+    except HTTPException:
+        raise
     except Exception as e:
         log.warning(f"Coach preview failed: {e}")
         raise HTTPException(500, f"Preview failed: {e}")
@@ -1009,6 +1024,43 @@ async def apply_coach_action(payload: CoachApplyPayload, user: Dict = Depends(ge
             await _run(lambda wid=wid, ue=updated: _t("workouts").update({"exercises": ue}).eq("id", wid).eq("user_id", uid).execute())
 
         return {"ok": True, "message": f"Added {extra_sets} set(s) to targeted exercises in upcoming workouts."}
+
+    elif atype == "replace_exercise":
+        swaps = data.get("swaps", [])
+        if not swaps:
+            return {"ok": True, "message": "Nothing to swap."}
+
+        # Group by workout_id so we update each workout once.
+        by_workout: Dict[str, List[Dict]] = {}
+        for s in swaps:
+            by_workout.setdefault(s["workout_id"], []).append(s)
+
+        for wid, swap_list in by_workout.items():
+            w_r = await _run(lambda wid=wid: _t("workouts").select("exercises").eq("id", wid).eq("user_id", uid).limit(1).execute())
+            if not w_r.data:
+                continue
+            current = w_r.data[0].get("exercises") or []
+            # Build a per-workout swap map keyed by either workout_exercise_id or from_exercise_id.
+            wex_id_map = {s.get("workout_exercise_id"): s for s in swap_list if s.get("workout_exercise_id")}
+            from_ex_map = {s["from_exercise_id"]: s for s in swap_list}
+
+            updated = []
+            for ex in current:
+                swap = wex_id_map.get(ex.get("id")) or from_ex_map.get(ex.get("exercise_id"))
+                if swap:
+                    new_ex = dict(ex)
+                    new_ex["exercise_id"] = swap["to_exercise_id"]
+                    new_ex["exercise_name"] = swap["to_exercise_name"]
+                    updated.append(new_ex)
+                else:
+                    updated.append(ex)
+            await _run(lambda wid=wid, ue=updated: _t("workouts").update({"exercises": ue}).eq("id", wid).eq("user_id", uid).execute())
+
+        first = swaps[0]
+        return {
+            "ok": True,
+            "message": f"Swapped {first['from_exercise_name']} → {first['to_exercise_name']} in {len(by_workout)} session(s).",
+        }
 
     raise HTTPException(400, f"Unknown action type: {atype}")
 

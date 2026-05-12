@@ -5,11 +5,11 @@ import { Button } from "../components/ui/button";
 import { Sparkles, RefreshCw, ChevronDown, ChevronUp, ShieldCheck, ShieldAlert, Send, Loader2, MessageCircle, CheckCircle, XCircle } from "lucide-react";
 
 const SUGGESTIONS = [
+  "I can only train 3 days this week",
+  "My calf is sore, give it a rest",
+  "I can't do pull-ups today, swap them",
+  "My chest is lagging, focus more on it",
   "How is my progress looking?",
-  "What should I focus on this week?",
-  "Which muscles am I undertrained in?",
-  "Explain my current split",
-  "How do I fix a missed workout?",
   "When should I move to the next mesocycle?",
 ];
 
@@ -46,9 +46,31 @@ function detectIntent(text) {
     }
   }
 
+  const injuryWords = ["injur", "hurt", "pain", "sore", "strain", "sprain", "torn", "rest my", "can't use", "cannot use", "bad knee", "bad shoulder", "bad back"];
+  const looksLikeInjury = injuryWords.some(w => t.includes(w));
+
+  // Replace specific exercise: "can't do pull-ups", "swap bench press", etc.
+  // Skip if the message reads as an injury+muscle-group complaint — the remove handler is preferred.
+  if (!looksLikeInjury) {
+    const replacePatterns = [
+      /(?:can[' ]?t|cannot|don[' ]?t want to|won[' ]?t)\s+do\s+([a-z0-9\-\s]+?)(?:\s+today|\s+this\s+week|[.,!?]|$)/,
+      /(?:replace|swap|switch(?:\s+out)?|sub(?:stitute)?|change)\s+(?:the\s+|my\s+)?([a-z0-9\-\s]+?)(?:\s+(?:for|with)\b|[.,!?]|$)/,
+      /(?:skip|no|drop)\s+(?:the\s+|my\s+)?([a-z0-9\-\s]+?)(?:\s+today|\s+this\s+week|[.,!?]|$)/,
+      /(?:i\s+hate|i\s+can[' ]?t\s+stand)\s+([a-z0-9\-\s]+?)(?:[.,!?]|$)/,
+    ];
+    for (const pat of replacePatterns) {
+      const m = t.match(pat);
+      if (m) {
+        const query = m[1].replace(/^(?:any|some|the|a|my)\s+/, "").trim();
+        if (query.length >= 3 && !["it", "that", "this", "them", "stuff", "things"].includes(query)) {
+          return { type: "replace_exercise", exercise_query: query };
+        }
+      }
+    }
+  }
+
   // Injury: avoid muscle exercises
-  const injuryWords = ["injur", "hurt", "pain", "sore", "strain", "sprain", "torn", "avoid", "skip", "rest my", "can't use", "cannot use", "bad knee", "bad shoulder", "bad back"];
-  if (injuryWords.some(w => t.includes(w))) {
+  if (looksLikeInjury || t.includes("avoid") || t.includes("skip")) {
     for (const [key, val] of Object.entries(_MUSCLE_MAP)) {
       if (t.includes(key)) return { type: "remove_exercises", muscle_groups: [val] };
     }
@@ -287,7 +309,7 @@ export default function Insights() {
         <div className="bg-card border border-border rounded-xl p-4 space-y-3">
           {messages.length === 0 && (
             <div className="space-y-3">
-              <p className="text-sm text-muted-foreground">Hey {name} — ask me anything about your training, recovery, or program.</p>
+              <p className="text-sm text-muted-foreground">Hey {name}. I've got your week in front of me — tell me what's going on and we'll figure it out together.</p>
               <div className="space-y-2">
                 {SUGGESTIONS.map((s) => (
                   <button
