@@ -561,6 +561,7 @@ def build_chat_system_prompt(
     prs: List[Dict],
     week_completed: List[Dict] = None,
     week_planned: List[Dict] = None,
+    has_program: bool = True,
 ) -> str:
     name = (user.get("name") or "Athlete").split()[0]
     goal = user.get("goal", "hypertrophy")
@@ -601,6 +602,18 @@ def build_chat_system_prompt(
             "ACTIVE PROGRAM:",
             f"- Split: {program.get('split_name', 'unknown')}",
             f"- Week {(program.get('current_week') or 0) + 1} of {program.get('weeks', 4)}",
+        ]
+
+    if not has_program:
+        lines += [
+            "",
+            "⚠️  CRITICAL CONTEXT — NO ACTIVE PROGRAM:",
+            f"- {name} has not set up a training program yet. There are zero scheduled workouts.",
+            "- DO NOT claim you've adjusted, merged, swapped, or modified anything — there is",
+            "  literally nothing to modify. Don't say 'I've queued up' or 'I've merged' or 'card below'.",
+            "- Instead: warmly acknowledge what they said, then tell them they need to set up their",
+            "  program first (Today tab → create program). Once a program exists, you can shape it",
+            "  around their week, injuries, and preferences. Keep it short and human.",
         ]
 
     if week_completed or week_planned:

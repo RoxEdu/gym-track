@@ -852,9 +852,12 @@ async def chat(payload: ChatPayload, user: Dict = Depends(get_current_user)):
             except Exception:
                 pass
 
+    has_program = bool(pid and program)
+
     system_prompt = build_chat_system_prompt(
         user, program, recent_workouts, prs,
         week_completed=week_completed, week_planned=week_planned,
+        has_program=has_program,
     )
     messages = [{"role": "system", "content": system_prompt}]
     messages += [{"role": m.role, "content": m.content} for m in payload.messages]
@@ -870,25 +873,37 @@ async def chat(payload: ChatPayload, user: Dict = Depends(get_current_user)):
     action_preview: Optional[Dict] = None
     if action_intent:
         atype = action_intent.get("type")
-        try:
-            if atype == "reschedule_week":
-                days = int(action_intent.get("days", 3))
-                action_preview = {"type": atype, **preview_reschedule_week(week_planned, days)}
-            elif atype == "remove_exercises":
-                mg = action_intent.get("muscle_groups", [])
-                exs_r = await _run(lambda: _t("exercises").select("*").limit(500).execute())
-                action_preview = {"type": atype, **preview_remove_exercises(week_planned, mg, exs_r.data or [])}
-            elif atype == "add_volume":
-                mg = action_intent.get("muscle_groups", [])
-                extra = int(action_intent.get("extra_sets", 2))
-                exs_r = await _run(lambda: _t("exercises").select("*").limit(500).execute())
-                action_preview = {"type": atype, **preview_add_volume(week_planned, mg, extra, exs_r.data or [])}
-            elif atype == "replace_exercise":
-                query = action_intent.get("exercise_query") or action_intent.get("exercise_name") or ""
-                exs_r = await _run(lambda: _t("exercises").select("*").limit(500).execute())
-                action_preview = {"type": atype, **preview_replace_exercise(week_planned, query, exs_r.data or [])}
-        except Exception as e:
-            log.warning(f"Coach action preview failed: {e}")
+        # No program → return an info card pointing the user at onboarding.
+        if not has_program:
+            action_preview = {
+                "type": "no_program",
+                "summary": (
+                    "I can't modify a plan that doesn't exist yet. Set up a program first "
+                    "(Today tab → start your program), then ask me again and I'll have something to work with."
+                ),
+                "cta_label": "Go to Today",
+                "cta_path": "/today",
+            }
+        else:
+            try:
+                if atype == "reschedule_week":
+                    days = int(action_intent.get("days", 3))
+                    action_preview = {"type": atype, **preview_reschedule_week(week_planned, days)}
+                elif atype == "remove_exercises":
+                    mg = action_intent.get("muscle_groups", [])
+                    exs_r = await _run(lambda: _t("exercises").select("*").limit(500).execute())
+                    action_preview = {"type": atype, **preview_remove_exercises(week_planned, mg, exs_r.data or [])}
+                elif atype == "add_volume":
+                    mg = action_intent.get("muscle_groups", [])
+                    extra = int(action_intent.get("extra_sets", 2))
+                    exs_r = await _run(lambda: _t("exercises").select("*").limit(500).execute())
+                    action_preview = {"type": atype, **preview_add_volume(week_planned, mg, extra, exs_r.data or [])}
+                elif atype == "replace_exercise":
+                    query = action_intent.get("exercise_query") or action_intent.get("exercise_name") or ""
+                    exs_r = await _run(lambda: _t("exercises").select("*").limit(500).execute())
+                    action_preview = {"type": atype, **preview_replace_exercise(week_planned, query, exs_r.data or [])}
+            except Exception as e:
+                log.warning(f"Coach action preview failed: {e}")
 
     return {"message": clean_reply, "action": action_preview}
 
@@ -908,16 +923,26 @@ async def coach_preview(payload: CoachPreviewPayload, user: Dict = Depends(get_c
     pid = user.get("active_program_id")
     atype = payload.type
 
+    if not pid:
+        return {
+            "type": "no_program",
+            "summary": (
+                "I can't modify a plan that doesn't exist yet. Set up a program first "
+                "(Today tab → start your program), then ask me again and I'll have something to work with."
+            ),
+            "cta_label": "Go to Today",
+            "cta_path": "/today",
+        }
+
     week_planned: List[Dict] = []
-    if pid:
-        try:
-            now = datetime.now(timezone.utc)
-            week_start_str = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
-            week_end_str = (now + timedelta(days=7 - now.weekday())).strftime("%Y-%m-%d")
-            week_r = await _run(lambda: _t("workouts").select("id,name,status,scheduled_date,exercises").eq("user_id", uid).eq("program_id", pid).gte("scheduled_date", week_start_str).lte("scheduled_date", week_end_str).order("scheduled_date").execute())
-            week_planned = [w for w in (week_r.data or []) if w["status"] in ("scheduled", "in_progress")]
-        except Exception as e:
-            log.warning(f"Preview week fetch failed: {e}")
+    try:
+        now = datetime.now(timezone.utc)
+        week_start_str = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
+        week_end_str = (now + timedelta(days=7 - now.weekday())).strftime("%Y-%m-%d")
+        week_r = await _run(lambda: _t("workouts").select("id,name,status,scheduled_date,exercises").eq("user_id", uid).eq("program_id", pid).gte("scheduled_date", week_start_str).lte("scheduled_date", week_end_str).order("scheduled_date").execute())
+        week_planned = [w for w in (week_r.data or []) if w["status"] in ("scheduled", "in_progress")]
+    except Exception as e:
+        log.warning(f"Preview week fetch failed: {e}")
 
     try:
         if atype == "reschedule_week":

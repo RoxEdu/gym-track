@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
-import { Sparkles, Send, Loader2, CheckCircle, XCircle } from "lucide-react";
+import { Sparkles, Send, Loader2, CheckCircle, XCircle, AlertCircle, ArrowRight } from "lucide-react";
 
 const _MUSCLE_MAP = {
   hamstring: "hamstrings", hamstrings: "hamstrings",
@@ -74,6 +75,15 @@ function detectIntent(text) {
   return null;
 }
 
+function _isEmptyAction(action) {
+  if (!action) return true;
+  if (action.type === "reschedule_week") return !(action.new_workouts || []).length;
+  if (action.type === "remove_exercises") return !(action.removals || []).length;
+  if (action.type === "add_volume") return !(action.additions || []).length;
+  if (action.type === "replace_exercise") return !(action.swaps || []).length;
+  return false;
+}
+
 const DEFAULT_SUGGESTIONS = [
   "I can only train 3 days this week",
   "My calf is sore, give it a rest",
@@ -84,6 +94,7 @@ const DEFAULT_SUGGESTIONS = [
 ];
 
 export default function CoachChat({ name = "there", suggestions = DEFAULT_SUGGESTIONS, intro }) {
+  const navigate = useNavigate();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -189,7 +200,24 @@ export default function CoachChat({ name = "there", suggestions = DEFAULT_SUGGES
             </div>
           ))}
 
-          {pendingAction && (
+          {pendingAction && pendingAction.type === "no_program" && (
+            <div className="border-2 border-orange-500/50 bg-orange-500/10 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <AlertCircle size={14} className="text-orange-400" />
+                <span className="text-xs font-mono font-bold uppercase tracking-widest text-orange-400">Set up your program first</span>
+              </div>
+              <p className="text-sm text-foreground leading-relaxed">{pendingAction.summary}</p>
+              <button
+                onClick={() => navigate(pendingAction.cta_path || "/today")}
+                className="w-full flex items-center justify-center gap-1.5 py-3 bg-orange-500 text-white rounded-xl text-sm font-mono font-bold hover:bg-orange-600 transition-colors"
+              >
+                <ArrowRight size={14} />
+                {pendingAction.cta_label || "Set up program"}
+              </button>
+            </div>
+          )}
+
+          {pendingAction && pendingAction.type !== "no_program" && (
             <div className="border-2 border-primary bg-primary/10 rounded-2xl p-4 space-y-3">
               <div className="flex items-center gap-2">
                 <Sparkles size={14} className="text-primary" />
@@ -199,11 +227,11 @@ export default function CoachChat({ name = "there", suggestions = DEFAULT_SUGGES
               <div className="flex gap-2">
                 <button
                   onClick={applyAction}
-                  disabled={applying}
+                  disabled={applying || _isEmptyAction(pendingAction)}
                   className="flex-1 flex items-center justify-center gap-1.5 py-3 bg-primary text-primary-foreground rounded-xl text-sm font-mono font-bold hover:bg-primary/90 transition-colors disabled:opacity-50"
                 >
                   {applying ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
-                  {applying ? "Applying…" : "Apply changes"}
+                  {applying ? "Applying…" : _isEmptyAction(pendingAction) ? "Nothing to apply" : "Apply changes"}
                 </button>
                 <button
                   onClick={() => setPendingAction(null)}
