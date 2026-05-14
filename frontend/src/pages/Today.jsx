@@ -4,18 +4,24 @@ import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { Button } from "../components/ui/button";
 import { PageSkeleton } from "../components/Skeleton";
-import { Calendar, Flame, TrendingUp, ArrowRight, Sparkles, CalendarRange } from "lucide-react";
+import { Calendar, Flame, TrendingUp, ArrowRight, Sparkles, CalendarRange, ChevronDown, ChevronUp } from "lucide-react";
 
 export default function Today() {
   const { user } = useAuth();
   const [workout, setWorkout] = useState(null);
   const [insights, setInsights] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [upcomingWorkouts, setUpcomingWorkouts] = useState([]);
+  const [showPicker, setShowPicker] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
-    Promise.all([api.get("/workouts/today"), api.get("/insights")])
-      .then(([w, i]) => { setWorkout(w.data.workout); setInsights(i.data); })
+    Promise.all([api.get("/workouts/today"), api.get("/insights"), api.get("/workouts/upcoming")])
+      .then(([w, i, u]) => {
+        setWorkout(w.data.workout);
+        setInsights(i.data);
+        setUpcomingWorkouts(u.data.workouts || []);
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -32,6 +38,13 @@ export default function Today() {
     navigate(`/workout/${workout.id}`);
   };
 
+  const selectWorkout = (w) => {
+    setWorkout(w);
+    setShowPicker(false);
+  };
+
+  const otherWorkouts = upcomingWorkouts.filter(w => w.id !== workout?.id);
+
   return (
     <div className="max-w-2xl mx-auto px-5 py-6 space-y-5" data-testid="today-page">
       <header className="fade-up">
@@ -41,27 +54,60 @@ export default function Today() {
       </header>
 
       {workout ? (
-        <div className="bg-card border border-border rounded-xl p-5 fade-up delay-1 relative overflow-hidden" data-testid="today-workout-card">
-          <div className="absolute -right-12 -top-12 w-48 h-48 bg-primary/10 rounded-full blur-3xl" />
-          <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">next session</div>
-          <div className="font-display text-3xl font-semibold mt-1">{workout.name}</div>
-          <div className="mt-3 flex items-center gap-4 text-xs font-mono text-muted-foreground">
-            <span className="flex items-center gap-1"><Calendar size={12} /> {new Date(workout.scheduled_date).toLocaleDateString()}</span>
-            <span>{workout.exercises.length} exercises</span>
-            <span>{workout.exercises.reduce((a,e) => a + e.target_sets, 0)} sets</span>
+        <div className="fade-up delay-1 space-y-2">
+          <div className="bg-card border border-border rounded-xl p-5 relative overflow-hidden" data-testid="today-workout-card">
+            <div className="absolute -right-12 -top-12 w-48 h-48 bg-primary/10 rounded-full blur-3xl" />
+            <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">today's session</div>
+            <div className="font-display text-3xl font-semibold mt-1">{workout.name}</div>
+            <div className="mt-3 flex items-center gap-4 text-xs font-mono text-muted-foreground">
+              <span className="flex items-center gap-1"><Calendar size={12} /> {new Date(workout.scheduled_date).toLocaleDateString()}</span>
+              <span>{workout.exercises.length} exercises</span>
+              <span>{workout.exercises.reduce((a,e) => a + e.target_sets, 0)} sets</span>
+            </div>
+            <div className="mt-4 space-y-1.5 text-sm">
+              {workout.exercises.slice(0, 5).map((e, i) => (
+                <div key={i} className="flex justify-between text-muted-foreground">
+                  <span>{e.exercise_name}</span>
+                  <span className="font-mono">{e.target_sets} × {e.rep_range[0]}-{e.rep_range[1]}</span>
+                </div>
+              ))}
+              {workout.exercises.length > 5 && <div className="text-xs text-muted-foreground">+ {workout.exercises.length - 5} more</div>}
+            </div>
+            <Button onClick={start} className="mt-5 w-full bg-primary text-primary-foreground hover:bg-primary/90 py-6 font-mono uppercase tracking-wider" data-testid="today-start-btn">
+              Start Workout <ArrowRight size={16} className="ml-2" />
+            </Button>
           </div>
-          <div className="mt-4 space-y-1.5 text-sm">
-            {workout.exercises.slice(0, 5).map((e, i) => (
-              <div key={i} className="flex justify-between text-muted-foreground">
-                <span>{e.exercise_name}</span>
-                <span className="font-mono">{e.target_sets} × {e.rep_range[0]}-{e.rep_range[1]}</span>
-              </div>
-            ))}
-            {workout.exercises.length > 5 && <div className="text-xs text-muted-foreground">+ {workout.exercises.length - 5} more</div>}
-          </div>
-          <Button onClick={start} className="mt-5 w-full bg-primary text-primary-foreground hover:bg-primary/90 py-6 font-mono uppercase tracking-wider" data-testid="today-start-btn">
-            Start Workout <ArrowRight size={16} className="ml-2" />
-          </Button>
+
+          {otherWorkouts.length > 0 && (
+            <div className="bg-card border border-border rounded-xl overflow-hidden">
+              <button
+                onClick={() => setShowPicker(!showPicker)}
+                className="w-full flex items-center justify-between px-4 py-3 text-sm font-mono text-muted-foreground hover:text-foreground transition-colors"
+                data-testid="choose-workout-toggle"
+              >
+                <span>Switch to a different workout</span>
+                {showPicker ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              </button>
+              {showPicker && (
+                <div className="border-t border-border divide-y divide-border" data-testid="workout-picker">
+                  {otherWorkouts.map((w) => (
+                    <button
+                      key={w.id}
+                      onClick={() => selectWorkout(w)}
+                      className="w-full text-left px-4 py-3 hover:bg-secondary/50 transition-colors"
+                      data-testid={`pick-workout-${w.id}`}
+                    >
+                      <div className="font-display text-sm font-semibold">{w.name}</div>
+                      <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mt-0.5">
+                        {new Date(w.scheduled_date).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
+                        {" · "}{w.exercises.length} exercises
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       ) : (
         <div className="bg-card border border-border rounded-xl p-6 text-center fade-up delay-1">

@@ -125,6 +125,12 @@ class CoachApplyPayload(BaseModel):
     payload: Dict[str, Any]
 
 
+class AddExercisePayload(BaseModel):
+    exercise_id: str
+    target_sets: int = 3
+    rep_range: List[int] = Field(default=[8, 12])
+
+
 # ── Auth ────────────────────────────────────────────────────────────────────
 async def get_current_user(authorization: Optional[str] = Header(None)) -> Dict:
     if not authorization or not authorization.startswith("Bearer "):
@@ -330,6 +336,21 @@ async def todays_workout(user: Dict = Depends(get_current_user)):
     return {"workout": result.data[0] if result.data else None}
 
 
+@api.get("/workouts/upcoming")
+async def upcoming_workouts(user: Dict = Depends(get_current_user)):
+    pid = user.get("active_program_id")
+    if not pid:
+        return {"workouts": []}
+    today = datetime.now(timezone.utc).date()
+    today_start = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc).isoformat()
+    result = await _run(
+        lambda: _t("workouts").select("id,name,scheduled_date,exercises,status").eq("program_id", pid)
+        .in_("status", ["scheduled", "in_progress"]).gte("scheduled_date", today_start)
+        .order("scheduled_date").limit(20).execute()
+    )
+    return {"workouts": result.data}
+
+
 @api.get("/workouts/{workout_id}")
 async def get_workout(workout_id: str, user: Dict = Depends(get_current_user)):
     uid = user["id"]
@@ -428,6 +449,45 @@ async def complete_workout(workout_id: str, user: Dict = Depends(get_current_use
         await _run(lambda: _t("stimulus_events").insert(event).execute())
 
     return {"ok": True, "duration_seconds": duration}
+
+
+@api.post("/workouts/{workout_id}/exercises")
+async def add_workout_exercise(workout_id: str, payload: AddExercisePayload, user: Dict = Depends(get_current_user)):
+    uid = user["id"]
+    w_result = await _run(lambda: _t("workouts").select("exercises").eq("id", workout_id).eq("user_id", uid).limit(1).execute())
+    if not w_result.data:
+        raise HTTPException(404, "Not found")
+    ex_result = await _run(lambda: _t("exercises").select("*").eq("id", payload.exercise_id).limit(1).execute())
+    if not ex_result.data:
+        raise HTTPException(404, "Exercise not found")
+    ex = ex_result.data[0]
+    exercises = list(w_result.data[0].get("exercises") or [])
+    new_we = {
+        "id": str(uuid.uuid4()),
+        "exercise_id": ex["id"],
+        "exercise_name": ex["name"],
+        "order_index": len(exercises),
+        "target_sets": payload.target_sets,
+        "rep_range": payload.rep_range,
+        "rest_seconds": 120,
+        "notes": "",
+        "is_deload": False,
+    }
+    exercises.append(new_we)
+    await _run(lambda: _t("workouts").update({"exercises": exercises}).eq("id", workout_id).eq("user_id", uid).execute())
+    return {"workout_exercise": new_we}
+
+
+@api.delete("/workouts/{workout_id}/exercises/{workout_exercise_id}")
+async def remove_workout_exercise(workout_id: str, workout_exercise_id: str, user: Dict = Depends(get_current_user)):
+    uid = user["id"]
+    w_result = await _run(lambda: _t("workouts").select("exercises").eq("id", workout_id).eq("user_id", uid).limit(1).execute())
+    if not w_result.data:
+        raise HTTPException(404, "Not found")
+    exercises = list(w_result.data[0].get("exercises") or [])
+    filtered = [e for e in exercises if e["id"] != workout_exercise_id]
+    await _run(lambda: _t("workouts").update({"exercises": filtered}).eq("id", workout_id).eq("user_id", uid).execute())
+    return {"ok": True}
 
 
 # ── Sets ─────────────────────────────────────────────────────────────────────

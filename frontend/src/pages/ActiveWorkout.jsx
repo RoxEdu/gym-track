@@ -4,7 +4,7 @@ import { api, logSetWithQueue } from "../lib/api";
 import { Button } from "../components/ui/button";
 import NumPad from "../components/NumPad";
 import RestTimer from "../components/RestTimer";
-import { Check, ChevronLeft, Trash2, Youtube, Sparkles, Zap, AlertTriangle, MoreVertical, Clock } from "lucide-react";
+import { Check, ChevronLeft, Trash2, Youtube, Sparkles, Zap, AlertTriangle, MoreVertical, Plus, X } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
@@ -22,13 +22,15 @@ export default function ActiveWorkout() {
   const navigate = useNavigate();
   const [workout, setWorkout] = useState(null);
   const [sets, setSets] = useState([]);
-  const [recs, setRecs] = useState({}); // { workout_exercise_id: {weight, reps, rir, source} }
-  const [readiness, setReadiness] = useState({}); // { workout_exercise_id: 0..1 }
+  const [recs, setRecs] = useState({});
+  const [readiness, setReadiness] = useState({});
   const [plateauIds, setPlateauIds] = useState([]);
   const [editing, setEditing] = useState(null);
   const [showRest, setShowRest] = useState(0);
   const [showVideo, setShowVideo] = useState(null);
-  const [pendingType, setPendingType] = useState({}); // setRow key -> set_type override
+  const [pendingType, setPendingType] = useState({});
+  const [showFinishConfirm, setShowFinishConfirm] = useState(false);
+  const [showAddExercise, setShowAddExercise] = useState(false);
 
   const load = useCallback(async () => {
     const [r1, r2] = await Promise.all([
@@ -80,6 +82,18 @@ export default function ActiveWorkout() {
     setSets((arr) => arr.map(x => x.id === s.id ? { ...x, [field]: value } : x));
   };
 
+  const removeExercise = async (weId) => {
+    await api.delete(`/workouts/${workoutId}/exercises/${weId}`);
+    setWorkout(w => ({ ...w, exercises: w.exercises.filter(e => e.id !== weId) }));
+    setSets(s => s.filter(set => set.workout_exercise_id !== weId));
+  };
+
+  const addExercise = async (ex) => {
+    const r = await api.post(`/workouts/${workoutId}/exercises`, { exercise_id: ex.id });
+    setWorkout(w => ({ ...w, exercises: [...w.exercises, r.data.workout_exercise] }));
+    setShowAddExercise(false);
+  };
+
   const finish = async () => {
     await api.post(`/workouts/${workoutId}/complete`);
     navigate("/today");
@@ -117,7 +131,18 @@ export default function ActiveWorkout() {
                   </div>
                   <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mt-0.5">target {we.target_sets} × {we.rep_range[0]}-{we.rep_range[1]} • rest {we.rest_seconds}s</div>
                 </div>
-                <Button variant="ghost" size="icon" onClick={() => setShowVideo(we.exercise_id)} data-testid={`video-btn-${we.id}`}><Youtube size={18} /></Button>
+                <div className="flex items-center gap-1">
+                  <Button variant="ghost" size="icon" onClick={() => setShowVideo(we.exercise_id)} data-testid={`video-btn-${we.id}`}><Youtube size={18} /></Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => removeExercise(we.id)}
+                    className="text-muted-foreground hover:text-destructive"
+                    data-testid={`remove-exercise-${we.id}`}
+                  >
+                    <X size={16} />
+                  </Button>
+                </div>
               </div>
 
               {/* Recommendation + readiness chip row */}
@@ -158,9 +183,21 @@ export default function ActiveWorkout() {
             </div>
           );
         })}
+
+        <button
+          onClick={() => setShowAddExercise(true)}
+          className="w-full border border-dashed border-border rounded-xl py-4 text-sm font-mono text-muted-foreground hover:border-primary/50 hover:text-primary transition-colors flex items-center justify-center gap-2"
+          data-testid="add-exercise-btn"
+        >
+          <Plus size={16} /> Add exercise
+        </button>
       </div>
 
-      <Button onClick={finish} className="fixed bottom-20 left-4 right-4 max-w-2xl mx-auto bg-primary text-primary-foreground hover:bg-primary/90 py-6 font-mono uppercase tracking-wider z-30" data-testid="finish-workout-btn">
+      <Button
+        onClick={() => setShowFinishConfirm(true)}
+        className="fixed bottom-20 left-4 right-4 max-w-2xl mx-auto bg-primary text-primary-foreground hover:bg-primary/90 py-6 font-mono uppercase tracking-wider z-30"
+        data-testid="finish-workout-btn"
+      >
         <Check size={18} className="mr-2" /> Finish workout
       </Button>
 
@@ -189,6 +226,29 @@ export default function ActiveWorkout() {
       )}
 
       {showVideo && <VideoModal exerciseId={showVideo} onClose={() => setShowVideo(null)} />}
+
+      {showAddExercise && <ExercisePicker onSelect={addExercise} onClose={() => setShowAddExercise(false)} />}
+
+      {showFinishConfirm && (
+        <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-end justify-center p-4" data-testid="finish-confirm-overlay">
+          <div className="bg-card border border-border rounded-xl p-6 w-full max-w-sm space-y-4">
+            <div>
+              <h2 className="font-display text-xl font-bold">Mark workout as complete?</h2>
+              <p className="text-sm text-muted-foreground mt-1">
+                You've logged {completedCount} of {totalTarget} target sets.
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <Button variant="outline" className="flex-1" onClick={() => setShowFinishConfirm(false)} data-testid="finish-cancel-btn">
+                Keep going
+              </Button>
+              <Button className="flex-1" onClick={finish} data-testid="finish-confirm-btn">
+                Yes, complete
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -252,6 +312,59 @@ function VideoModal({ exerciseId, onClose }) {
           </div>
         )}
         <Button onClick={onClose} className="mt-3 w-full" variant="outline" data-testid="video-close">Close</Button>
+      </div>
+    </div>
+  );
+}
+
+function ExercisePicker({ onSelect, onClose }) {
+  const [search, setSearch] = useState("");
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    const t = setTimeout(() => {
+      api.get(`/exercises${search ? `?search=${encodeURIComponent(search)}` : ""}`)
+        .then(r => setResults(r.data || []))
+        .finally(() => setLoading(false));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-background/90 backdrop-blur-sm flex items-end justify-center" data-testid="exercise-picker">
+      <div className="bg-card border border-border rounded-t-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+        <div className="p-4 flex items-center gap-3 border-b border-border">
+          <input
+            autoFocus
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search exercises..."
+            className="flex-1 bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono outline-none focus:border-primary"
+            data-testid="exercise-search"
+          />
+          <Button variant="ghost" onClick={onClose} data-testid="exercise-picker-close">Cancel</Button>
+        </div>
+        <div className="overflow-y-auto flex-1">
+          {loading && <div className="px-4 py-3 text-sm font-mono text-muted-foreground">searching...</div>}
+          {!loading && results.length === 0 && (
+            <div className="px-4 py-6 text-center text-sm text-muted-foreground font-mono">No exercises found</div>
+          )}
+          {results.map(ex => (
+            <button
+              key={ex.id}
+              onClick={() => onSelect(ex)}
+              className="w-full text-left px-4 py-3 hover:bg-secondary/50 border-b border-border transition-colors"
+              data-testid={`pick-exercise-${ex.id}`}
+            >
+              <div className="font-display text-sm font-semibold">{ex.name}</div>
+              <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mt-0.5">
+                {ex.category} · {ex.movement}
+              </div>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
