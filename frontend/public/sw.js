@@ -1,5 +1,5 @@
 /* GymTrack service worker — minimal cache + network-first SWR for /api GETs */
-const CACHE_VERSION = "gymtrack-v1";
+const CACHE_VERSION = "gymtrack-v2";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const API_CACHE = `${CACHE_VERSION}-api`;
 
