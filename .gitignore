@@ -17,7 +17,6 @@ frontend/.env
 frontend/.env.local
 
 # Production builds
-build/
 dist/
 .next/
 out/
